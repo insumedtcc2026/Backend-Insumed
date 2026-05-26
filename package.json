@@ -2,7 +2,7 @@
   "name": "backend-insumed",
   "version": "1.0.0",
   "description": "Servidor backend tcc Insumed ",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "backend": "node src/server.js"
   },
