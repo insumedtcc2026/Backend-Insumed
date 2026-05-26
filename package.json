@@ -4,7 +4,7 @@
   "description": "Servidor backend tcc Insumed ",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "backend": "node src/server.js"
   },
   "keywords": [],
   "author": "Projeto Insumed",
