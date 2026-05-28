@@ -1,5 +1,10 @@
-const PORT = process.env.PORT || 3000;
+const express = require('express');
+const routes = require('./routes');
+const cors = require('cors');
 
-app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
-});
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use(routes)
+
+app.listen(3344, ()=> console.log('Servidor ON na porta 3344'));
