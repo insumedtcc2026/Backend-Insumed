@@ -4,7 +4,7 @@
   "description": "Servidor backend tcc Insumed ",
   "main": "server.js",
   "scripts": {
-    "backend": "node src/server.js"
+    "start": "node src/server.js"
   },
   "keywords": [],
   "author": "Projeto Insumed",
