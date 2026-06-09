@@ -4,7 +4,7 @@
   "description": "Servidor backend tcc Insumed ",
   "main": "server.js",
   "scripts": {
-    "backend": "node src/server.js"
+    "start": "node src/server.js"
   },
   "keywords": [],
   "author": "Projeto Insumed",
@@ -15,6 +15,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "knex": "^3.2.10",
+    "nodemon": "^3.1.14",
     "pg": "^8.21.0"
   }
 }

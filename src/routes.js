@@ -1,4 +1,4 @@
 const express = require('express');
 
-
-module.exports = routes;
+const routes = express.Router();
+module.exports = routes;        
