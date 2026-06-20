@@ -1,4 +1,5 @@
 const knex = require('../database/index.js');
+const bcrypt = require('bcrypt');
 
 module.exports = {
 //busca todos os dados da tabela pacientes
@@ -18,11 +19,15 @@ module.exports = {
    async createpaciente(req, res) {
     const { nome , email, telefone, cpf, data_nasc, sexo, endereco, raça, senha } = req.body;
 
+//criptografa a senha do paciente
+ const hashSenha = await bcrypt.hash(req.body.senha, 10);
+ console.log(hashSenha);
+
 const dadoscreate = {
     'pac_nome': nome,
     'pac_email': email,
     'pac_telefone': telefone, 
-    'pac_senha': senha,
+    'pac_senha': hashSenha,
     'pac_cpf': cpf,
     'pac_data_nasc': data_nasc, 
     'pac_sexo': sexo,
