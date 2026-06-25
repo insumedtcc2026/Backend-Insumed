@@ -1,4 +1,4 @@
-module.exports = {
+export default {
     async raiz(req, res){
         const html = `
                     <!DOCTYPE html>

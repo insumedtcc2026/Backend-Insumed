@@ -1,13 +1,13 @@
-require ('dotenv').config();
-const config ={
-    development:{
-        client:'postgresql',
-        connection: process.env.DATABASE_URL,
-        ssl: {
-            rejectUnauthorized: false
-        },
-        
-    }
-}
+import 'dotenv/config';
 
-module.exports = config;
+const config = {
+  development: {
+    client: 'postgresql',
+    connection: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false
+    },
+  }
+};
+
+export default config;

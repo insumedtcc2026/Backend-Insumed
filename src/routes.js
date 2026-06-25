@@ -1,13 +1,16 @@
-const express = require('express');
-const pacientesControllers = require('./controllers/pacientesControllers');
-const raizControllers = require('./controllers/raizControllers');
+import express from "express";
+import pacientesControllers from './controllers/pacientesControllers.js'; // Adicionado .js
+import raizControllers from './controllers/raizControllers.js'; // Adicionado .js
+// import autorizar from './middleware/autorizar.js' // Se for descomentar depois, adicione aqui também!
+
 const routes = express.Router();
 
 routes.get('/', raizControllers.raiz);
-//rotas do paciente
+
+// Rotas do paciente
 routes.get('/pacientesall', pacientesControllers.pacientesall);
-//rota post do paciente
+
+// Rota post do paciente
 routes.post('/pacientes', pacientesControllers.createpaciente);
 
-module.exports = routes;
-    
+export default routes;
