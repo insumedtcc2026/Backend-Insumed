@@ -46,7 +46,7 @@ else if (sexo?.toLowerCase() === "outro") sexoFormatado = "O";
     if (!senha) {
       throw new Error("Senha está undefined");
     }
-
+//conecta com o frontend
     const hashSenha = await bcrypt.hash(senha, 10);
 
     const dadoscreate = {
@@ -75,7 +75,53 @@ console.log("SEXO FORMATADO:", sexoFormatado);
     console.error(" ERRO NO BACKEND:", erro);
     res.status(500).json({ erro: erro.message });
   }
-}
+},
    
+
+async login(req, res) {
+  try {
+    const { email, senha } = req.body;
+
+    const usuario = await knex("pacientes")
+      .where("pac_email", email)
+      .first();
+
+      console.log('usuarios nao encontrado:', usuario)
+
+    if (!usuario) {
+      return res.status(401).json({
+        msg: "Email ou senha inválidos"
+      });
+    }
+console.log(req.body);
+    const senhaCorreta = await bcrypt.compare(
+      senha,
+      usuario.pac_senha
+
+    );
+    console.log("Senha correta:", senhaCorreta);
+
+    if (!senhaCorreta) {
+      return res.status(401).json({
+        msg: "Email ou senha inválidos"
+      });
+    }
+
+    return res.status(200).json({
+      msg: "Login realizado com sucesso",
+      usuario: {
+        id: usuario.id,
+        nome: usuario.pac_nome,
+        email: usuario.pac_email
+      }
+      
+    });
+console.log("Senha válida:", senhaCorreta);
+  } catch (erro) {
+    return res.status(500).json({
+      erro: erro.message
+    });
+  }
+}
 
 }

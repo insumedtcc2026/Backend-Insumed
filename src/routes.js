@@ -13,4 +13,6 @@ routes.get('/pacientesall', pacientesControllers.pacientesall);
 // Rota post do paciente
 routes.post('/pacientes', pacientesControllers.createpaciente);
 
+routes.post('/login', pacientesControllers.login)
+
 export default routes;
