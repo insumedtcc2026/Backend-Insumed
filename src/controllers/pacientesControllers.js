@@ -4,13 +4,15 @@ import bcrypt from 'bcrypt'
 export default  {
 //busca todos os dados da tabela pacientes
   async pacientesall(req, res) {
-    try {
-      const nome = await knex('pacientes');
-      console.log(nome);
-      return res.status(200).send(nome);
-    } catch (error) {
-      res.status(500).send({ message: 'Erro ao buscar pacientes', error: error.message });
-    }
+    console.log("DADOS PARA INSERT:", dadoscreate);
+
+try {
+  await knex("pacientes").insert(dadoscreate);
+  console.log("INSERT REALIZADO COM SUCESSO");
+} catch (e) {
+  console.error("ERRO NO INSERT:", e);
+  throw e;
+}
   },
 
 
