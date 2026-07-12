@@ -1,5 +1,6 @@
 import knex from '../database/index.js';
 import bcrypt from 'bcrypt'
+import jsonwebtoken from 'jsonwebtoken';
 
 export default  {
 //busca todos os dados da tabela pacientes
@@ -69,7 +70,7 @@ else if (sexo?.toLowerCase() === "outro") sexoFormatado = "O";
     console.log("SEXO ORIGINAL:", sexo);
 console.log("SEXO FORMATADO:", sexoFormatado);
 
-    res.status(201).json({ msg: "OK" });
+    res.status(201).json({ msg: "Usuasrio cadastrado com exito" });
 
   } catch (erro) {
     console.error(" ERRO NO BACKEND:", erro);
@@ -94,29 +95,30 @@ async login(req, res) {
       });
     }
 console.log(req.body);
-    const senhaCorreta = await bcrypt.compare(
-      senha,
-      usuario.pac_senha
 
-    );
-    console.log("Senha correta:", senhaCorreta);
+    if(usuario != undefined){
+      bcrypt.compare(senha, usuario.pac_senha, (err, respok) => {
+        if (err) {
+          return res.status(403).json({erro: "Erro ao comparar senhas"});
+        }
+        
+        if (respok) {
+          const token = jsonwebtoken.sign(
+            { id: usuario.id, email: usuario.pac_email },
+            process.env.ACCESS_TOKEN_SECRET,
+            { expiresIn: '7d' }
+          );
+          return res.status(200).json({
+            msg: "Autenticação realizada com sucesso",
+            token: token
+          });
 
-    if (!senhaCorreta) {
-      return res.status(401).json({
-        msg: "Email ou senha inválidos"
-      });
+          return res.status(401).send({
+           alert: "Email ou senha inválidos!!!"
+          });
+        }
+      })
     }
-
-    return res.status(200).json({
-      msg: "Login realizado com sucesso",
-      usuario: {
-        id: usuario.id,
-        nome: usuario.pac_nome,
-        email: usuario.pac_email
-      }
-      
-    });
-console.log("Senha válida:", senhaCorreta);
   } catch (erro) {
     return res.status(500).json({
       erro: erro.message

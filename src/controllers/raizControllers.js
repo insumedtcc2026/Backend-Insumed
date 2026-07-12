@@ -11,7 +11,6 @@ export default {
                 res.status(err.status || 500).send ({
                     msg: ' Erro ao carregar a pagina de documentação',
                     error: err.message
-
                 });
             }
         });
