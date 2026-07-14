@@ -84,16 +84,18 @@ async login(req, res) {
     const { email, senha } = req.body;
 
     const usuario = await knex("pacientes")
-      .where("pac_email", email)
-      .first();
-
-      console.log('usuarios nao encontrado:', usuario)
+      .where("pac_email", email).first();
 
     if (!usuario) {
       return res.status(401).json({
         msg: "Email ou senha inválidos"
       });
-    }
+    }/*else{
+      res.status(200).json({
+        msg: "Usuario encontrado",
+        usuario: usuario
+      });
+    } */
 console.log(req.body);
 
     if(usuario != undefined){
@@ -110,7 +112,8 @@ console.log(req.body);
           );
           return res.status(200).json({
             msg: "Autenticação realizada com sucesso",
-            token: token
+            token: token,
+            usuario: usuario
           });
 
           return res.status(401).send({

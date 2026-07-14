@@ -16,7 +16,7 @@ routes.post('/pacientes', pacientesControllers.createpaciente);
 routes.post('/login',pacientesControllers.login)
 
 //Rota de Validação de Token
-routes.get('/validar', authorization,(req, res)=>{
+routes.get('/validar', authorization, (req, res)=>{
     res.status(200).send({ message: 'Token válido', session: req.session });
 });
 
