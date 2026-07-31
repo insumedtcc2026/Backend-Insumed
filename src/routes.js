@@ -2,6 +2,7 @@ import express from "express";
 import pacientesControllers from './controllers/pacientesControllers.js'; // Adicionado .js
 import raizControllers from './controllers/raizControllers.js'; // Adicionado .js
 import authorization from './middleware/autorizar.js' // Se for descomentar depois, adicione aqui também!
+import postocoleta from './controllers/postocoleta.js'
 
 const routes = express.Router();
 
@@ -19,6 +20,11 @@ routes.post('/login',pacientesControllers.login)
 routes.get('/validar', authorization, (req, res)=>{
     res.status(200).send({ message: 'Token válido', session: req.session });
 });
+
+//Rotas do posto de coleta 
+routes.get('/postos' , postocoleta.listar)
+
+
 
 
 export default routes;
