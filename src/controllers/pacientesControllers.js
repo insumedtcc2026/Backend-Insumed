@@ -31,7 +31,8 @@ export default  {
       sexo,
       endereco,
       raca,
-      senha
+      senha,
+      cep
     } = req.body;
     const sexoLimpo = sexo?.trim().toLowerCase();
 
@@ -59,7 +60,8 @@ else if (sexo?.toLowerCase() === "outro") sexoFormatado = "O";
       pac_data_nasc: data_nasc || null,
       pac_sexo: sexoFormatado || null,
       pac_endereco: endereco,
-      pac_raca: raca || null
+      pac_raca: raca || null,
+      pac_cep: cep 
     };
 
     console.log("DADOS PARA INSERT:", dadoscreate);
