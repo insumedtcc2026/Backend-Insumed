@@ -1,8 +1,11 @@
 import express from "express";
 import pacientesControllers from './controllers/pacientesControllers.js'; // Adicionado .js
 import raizControllers from './controllers/raizControllers.js'; // Adicionado .js
+import administradorControllers from "./controllers/administradorControllers.js";
+import prescritorControllers from "./controllers/prescritorControllers.js";
 import authorization from './middleware/autorizar.js' // Se for descomentar depois, adicione aqui também!
 import postocoleta from './controllers/postocoleta.js'
+
 
 const routes = express.Router();
 
@@ -23,6 +26,15 @@ routes.get('/validar', authorization, (req, res)=>{
 
 //Rotas do posto de coleta 
 routes.get('/postos' , postocoleta.listar)
+
+
+//rotas administrador
+
+routes.get('/administradorall', administradorControllers.administradorall);
+
+
+//rotas prescritor
+routes.get('/prescritorall', prescritorControllers.prescritorall);
 
 
 
