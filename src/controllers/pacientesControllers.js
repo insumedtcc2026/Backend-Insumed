@@ -3,6 +3,10 @@ import bcrypt from 'bcrypt'
 import jsonwebtoken from 'jsonwebtoken';
 
 export default  {
+
+
+
+  
 //busca todos os dados da tabela pacientes
   async pacientesall(req, res) {
     try {
@@ -34,12 +38,37 @@ export default  {
       senha,
       cep,
     } = req.body;
-    const sexoLimpo = sexo?.trim().toLowerCase();
+    
 
-let sexoFormatado = null;
-if (sexo?.toLowerCase() === "masculino") sexoFormatado = "M";
-else if (sexo?.toLowerCase() === "feminino") sexoFormatado = "F";
-else if (sexo?.toLowerCase() === "outro") sexoFormatado = "O";
+const sexoLimpo = (sexo || "").trim().toLowerCase();
+
+let sexoFormatado;
+
+switch (sexoLimpo) {
+  case "masculino":
+    sexoFormatado = "M";
+    break;
+
+  case "feminino":
+    sexoFormatado = "F";
+    break;
+
+  case "outro":
+    sexoFormatado = "O";
+    break;
+
+  case "prefiro não responder":
+    sexoFormatado = "N";
+    break;
+
+  default:
+    console.log("Sexo inválido:", sexo);
+    return res.status(400).json({
+      erro: "Sexo inválido",
+      recebido: sexo
+    });
+}
+console.log(dadoscreate);
 
     console.log("NOME:", nome);
     console.log("EMAIL:", email);
@@ -65,8 +94,9 @@ else if (sexo?.toLowerCase() === "outro") sexoFormatado = "O";
     };
 
     console.log("DADOS PARA INSERT:", dadoscreate);
-
-    
+    console.log("SEXO ORIGINAL:", sexo);
+console.log("SEXO FORMATADO:", sexoFormatado);
+    console.log(req.body);
     await knex('pacientes').insert(dadoscreate);
 
     console.log("SEXO ORIGINAL:", sexo);
@@ -79,11 +109,49 @@ console.log("SEXO FORMATADO:", sexoFormatado);
     res.status(500).json({ erro: erro.message });
   }
 },
+
+
+
+
+
    
 
 async login(req, res) {
   try {
     const { email, senha } = req.body;
+    
+    const paciente = await knex("pacientes")
+  .where({ pac_email: email })
+  .first();
+  if (paciente) {
+   // verifica senha
+   return res.json({
+      tipo: "PACIENTE",
+      usuario: paciente
+   });
+}
+
+// 2º Procura prescritor
+const prescritor = await knex("prescritor")
+  .where({ pre_email: email })
+  .first();
+
+if (prescritor) {
+   return res.json({
+      tipo: "PRESCRITOR",
+      usuario: prescritor
+   });
+}
+const admin = await knex("administrador")
+  .where({ adm_email: email })
+  .first();
+
+if (admin) {
+   return res.json({
+      tipo: "ADMIN",
+      usuario: admin
+   });
+}
 
     const usuario = await knex("pacientes")
       .where("pac_email", email).first();
@@ -131,4 +199,7 @@ console.log(req.body);
   }
 }
 
+
+
 }
+
