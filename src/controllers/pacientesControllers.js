@@ -1,205 +1,160 @@
 import knex from '../database/index.js';
-import bcrypt from 'bcrypt'
+import bcrypt from 'bcrypt';
 import jsonwebtoken from 'jsonwebtoken';
 
-export default  {
-
-
-
-  
-//busca todos os dados da tabela pacientes
+export default {
+  // Busca todos os dados da tabela pacientes
   async pacientesall(req, res) {
     try {
-      const nome = await knex('pacientes');
-      console.log(nome);
-      return res.status(200).send(nome);
+      const pacientes = await knex('pacientes');
+      return res.status(200).send(pacientes);
     } catch (error) {
-      res.status(500).send({ message: 'Erro ao buscar pacientes', error: error.message });
+      return res.status(500).send({ message: 'Erro ao buscar pacientes', error: error.message });
     }
   },
 
-
-//cria um novo paciente
+  // Cria um novo paciente
   async createpaciente(req, res) {
-  try {
-    
+    try {
+      const {
+        nome,
+        email,
+        telefone,
+        cpf,
+        data_nasc,
+        sexo,
+        endereco,
+        raca,
+        senha,
+        cep,
+      } = req.body;
 
-    console.log("BODY:", req.body);
+      const sexoLimpo = (sexo || "").trim().toLowerCase();
+      let sexoFormatado;
 
-    const {
-      nome,
-      email,
-      telefone,
-      cpf,
-      data_nasc,
-      sexo,
-      endereco,
-      raca,
-      senha,
-      cep,
-    } = req.body;
-    
+      switch (sexoLimpo) {
+        case "masculino":
+          sexoFormatado = "M";
+          break;
+        case "feminino":
+          sexoFormatado = "F";
+          break;
+        case "outro":
+          sexoFormatado = "O";
+          break;
+        case "prefiro não responder":
+          sexoFormatado = "N";
+          break;
+        default:
+          return res.status(400).json({
+            erro: "Sexo inválido",
+            recebido: sexo
+          });
+      }
 
-const sexoLimpo = (sexo || "").trim().toLowerCase();
+      if (!senha) {
+        return res.status(400).json({ erro: "Senha é obrigatória" });
+      }
 
-let sexoFormatado;
+      const hashSenha = await bcrypt.hash(senha, 10);
 
-switch (sexoLimpo) {
-  case "masculino":
-    sexoFormatado = "M";
-    break;
+      const dadoscreate = {
+        pac_nome: nome,
+        pac_email: email,
+        pac_telefone: telefone,
+        pac_senha: hashSenha,
+        pac_cpf: cpf,
+        pac_data_nasc: data_nasc || null,
+        pac_sexo: sexoFormatado || null,
+        pac_endereco: endereco,
+        pac_raca: raca || null,
+        pac_cep: cep || null,
+      };
 
-  case "feminino":
-    sexoFormatado = "F";
-    break;
+      await knex('pacientes').insert(dadoscreate);
 
-  case "outro":
-    sexoFormatado = "O";
-    break;
+      return res.status(201).json({ msg: "Usuário cadastrado com êxito" });
 
-  case "prefiro não responder":
-    sexoFormatado = "N";
-    break;
-
-  default:
-    console.log("Sexo inválido:", sexo);
-    return res.status(400).json({
-      erro: "Sexo inválido",
-      recebido: sexo
-    });
-}
-console.log(dadoscreate);
-
-    console.log("NOME:", nome);
-    console.log("EMAIL:", email);
-    console.log("SENHA:", senha);
-
-    if (!senha) {
-      throw new Error("Senha está undefined");
+    } catch (erro) {
+      console.error("ERRO NO BACKEND:", erro);
+      return res.status(500).json({ erro: erro.message });
     }
-//conecta com o frontend
-    const hashSenha = await bcrypt.hash(senha, 10);
+  },
 
-    const dadoscreate = {
-      pac_nome: nome,
-      pac_email: email,
-      pac_telefone: telefone,
-      pac_senha: hashSenha,
-      pac_cpf: cpf,
-      pac_data_nasc: data_nasc || null,
-      pac_sexo: sexoFormatado || null,
-      pac_endereco: endereco,
-      pac_raca: raca || null,
-      pac_cep: cep || null,
-    };
+  // Login unificado (Paciente, Prescritor ou Admin)
+  async login(req, res) {
+    try {
+      const { email, senha } = req.body;
 
-    console.log("DADOS PARA INSERT:", dadoscreate);
-    console.log("SEXO ORIGINAL:", sexo);
-console.log("SEXO FORMATADO:", sexoFormatado);
-    console.log(req.body);
-    await knex('pacientes').insert(dadoscreate);
+      if (!email || !senha) {
+        return res.status(400).json({ erro: "E-mail e senha são obrigatórios" });
+      }
 
-    console.log("SEXO ORIGINAL:", sexo);
-console.log("SEXO FORMATADO:", sexoFormatado);
+      const secret = process.env.ACCESS_TOKEN_SECRET || 'sua_chave_secreta_fallback';
 
-    res.status(201).json({ msg: "Usuasrio cadastrado com exito" });
-
-  } catch (erro) {
-    console.error(" ERRO NO BACKEND:", erro);
-    res.status(500).json({ erro: erro.message });
-  }
-},
-
-
-
-
-
-   
-
-async login(req, res) {
-  try {
-    const { email, senha } = req.body;
-    
-    const paciente = await knex("pacientes")
-  .where({ pac_email: email })
-  .first();
-  if (paciente) {
-   // verifica senha
-   return res.json({
-      tipo: "PACIENTE",
-      usuario: paciente
-   });
-}
-
-// 2º Procura prescritor
-const prescritor = await knex("prescritor")
-  .where({ pre_email: email })
-  .first();
-
-if (prescritor) {
-   return res.json({
-      tipo: "PRESCRITOR",
-      usuario: prescritor
-   });
-}
-const admin = await knex("administrador")
-  .where({ adm_email: email })
-  .first();
-
-if (admin) {
-   return res.json({
-      tipo: "ADMIN",
-      usuario: admin
-   });
-}
-
-    const usuario = await knex("pacientes")
-      .where("pac_email", email).first();
-
-    if (!usuario) {
-      return res.status(401).json({
-        msg: "Email ou senha inválidos"
-      });
-    }/*else{
-      res.status(200).json({
-        msg: "Usuario encontrado",
-        usuario: usuario
-      });
-    } */
-console.log(req.body);
-
-    if(usuario != undefined){
-      bcrypt.compare(senha, usuario.pac_senha, (err, respok) => {
-        if (err) {
-          return res.status(403).json({erro: "Erro ao comparar senhas"});
-        }
-        
-        if (respok) {
+      // 1º Tenta Paciente
+      const paciente = await knex("pacientes").where("pac_email", email).first();
+      if (paciente) {
+        const senhaValida = await bcrypt.compare(senha, paciente.pac_senha);
+        if (senhaValida) {
           const token = jsonwebtoken.sign(
-            { id: usuario.id, email: usuario.pac_email },
-            process.env.ACCESS_TOKEN_SECRET,
+            { id: paciente.pac_id || paciente.id, email: paciente.pac_email, tipo: 'PACIENTE' },
+            secret,
             { expiresIn: '7d' }
           );
           return res.status(200).json({
             msg: "Autenticação realizada com sucesso",
-            token: token,
-            usuario: usuario
-          });
-
-          return res.status(401).send({
-           alert: "Email ou senha inválidos!!!"
+            token,
+            usuario: paciente,
+            tipo: 'PACIENTE'
           });
         }
-      })
+      }
+
+      // 2º Tenta Prescritor
+      const prescritor = await knex("prescritor").where({ pre_email: email }).first();
+      if (prescritor) {
+        const senhaValida = await bcrypt.compare(senha, prescritor.pre_senha);
+        if (senhaValida) {
+          const token = jsonwebtoken.sign(
+            { id: prescritor.pre_id, email: prescritor.pre_email, tipo: 'PRESCRITOR' },
+            secret,
+            { expiresIn: "7d" }
+          );
+          return res.status(200).json({
+            msg: "Autenticação realizada com sucesso",
+            token,
+            usuario: prescritor,
+            tipo: "PRESCRITOR"
+          });
+        }
+      }
+
+      // 3º Tenta Admin
+      const admin = await knex("administrador").where({ adm_email: email }).first();
+      if (admin) {
+        const senhaValida = await bcrypt.compare(senha, admin.adm_senha);
+        if (senhaValida) {
+          const token = jsonwebtoken.sign(
+            { id: admin.adm_id, email: admin.adm_email, tipo: 'ADMIN' },
+            secret,
+            { expiresIn: "7d" }
+          );
+          return res.status(200).json({
+            msg: "Autenticação realizada com sucesso",
+            token,
+            usuario: admin,
+            tipo: "ADMIN"
+          });
+        }
+      }
+
+      // Se não encontrou usuário ou a senha estava errada
+      return res.status(401).json({ msg: "E-mail ou senha inválidos" });
+
+    } catch (erro) {
+      console.error("ERRO NO LOGIN:", erro);
+      return res.status(500).json({ erro: erro.message });
     }
-  } catch (erro) {
-    return res.status(500).json({
-      erro: erro.message
-    });
   }
-}
-
-
-
-}
-
+};

@@ -29,3 +29,4 @@ export default (req, res, next) => {
         return res.status(500).send({error: 'Erro interno do servidor'});
     } 
    }
+console.log("VERSAO NOVA DO MIDDLEWARE");
