@@ -9,7 +9,7 @@ import postocoleta from './controllers/postocoleta.js'
 
 const routes = express.Router();
 
-routes.get('/', raizControllers.raiz);
+//routes.get('/', raizControllers.raiz);
 
 // Rotas do paciente
 routes.get('/pacientesall', pacientesControllers.pacientesall);
@@ -32,6 +32,7 @@ routes.get('/postos' , postocoleta.listar)
 
 routes.get('/administradorall', administradorControllers.administradorall);
 
+routes.post('/administrador', administradorControllers.createadministrador);
 
 //rotas prescritor
 routes.get('/prescritorall', prescritorControllers.prescritorall);
