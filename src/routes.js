@@ -1,10 +1,12 @@
-import express from "express";
+import express, { Router } from "express";
 import pacientesControllers from './controllers/pacientesControllers.js'; // Adicionado .js
 import raizControllers from './controllers/raizControllers.js'; // Adicionado .js
 import administradorControllers from "./controllers/administradorControllers.js";
 import prescritorControllers from "./controllers/prescritorControllers.js";
 import authorization from './middleware/autorizar.js' // Se for descomentar depois, adicione aqui também!
 import postocoleta from './controllers/postocoleta.js'
+import autorizarAdmin from "./middleware/autorizarAdmin.js";
+import agendamentosControllers from "./controllers/agendamentosControllers.js";
 
 
 const routes = express.Router();
@@ -16,6 +18,8 @@ routes.get('/pacientesall', pacientesControllers.pacientesall);
 
 // Rota post do paciente
 routes.post('/pacientes', pacientesControllers.createpaciente);
+
+routes.get('/pacientes', authorization, autorizarAdmin, pacientesControllers.buscarPorCpf);
 
 routes.post('/login',pacientesControllers.login)
 
@@ -37,6 +41,15 @@ routes.post('/administrador', administradorControllers.createadministrador);
 //rotas prescritor
 routes.get('/prescritorall', prescritorControllers.prescritorall);
 
+//agendamento
+routes.get('/agendamentos', agendamentosControllers.listar);
+routes.post('/agendamentos', agendamentosControllers.criar);
+
+routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, 
+agendamentosControllers.concluir);
+routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, agendamentosControllers.cancelar);
+
+routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 
 
 

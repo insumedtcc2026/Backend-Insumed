@@ -102,6 +102,8 @@ export default {
             secret,
             { expiresIn: '7d' }
           );
+          //console.log("RESPOSTA:", response.data);
+//console.log("TOKEN:", response.data.token);
           return res.status(200).json({
             msg: "Autenticação realizada com sucesso",
             token,
@@ -156,5 +158,19 @@ export default {
       console.error("ERRO NO LOGIN:", erro);
       return res.status(500).json({ erro: erro.message });
     }
-  }
+  },
+
+  async buscarPorCpf (req, res) {
+try {
+const { cpf } = req.query;
+if (!cpf) return res.status(200).send([]);
+const termoLimpo = cpf.replace(/\D/g, '');
+const pacientes = await knex('pacientes')
+.whereRaw("REPLACE(REPLACE(REPLACE(pac_cpf, '.', ''), '-', ''), ' ', '') LIKE ?", [`%${termoLimpo}%`])
+.select('pac_id', 'pac_nome', 'pac_cpf', 'pac_telefone').limit(10);
+return res.status(200).send(pacientes);
+} catch (error) {
+return res.status(500).send({ message: 'Erro ao buscar pacientes', error: error.message });
+}
+}
 };
