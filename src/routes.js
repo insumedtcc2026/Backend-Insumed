@@ -7,6 +7,7 @@ import authorization from './middleware/autorizar.js' // Se for descomentar depo
 import postocoleta from './controllers/postocoleta.js'
 import autorizarAdmin from "./middleware/autorizarAdmin.js";
 import agendamentosControllers from "./controllers/agendamentosControllers.js";
+import insumosControllers from "./controllers/insumosControllers.js";
 
 
 const routes = express.Router();
@@ -52,5 +53,5 @@ routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, agenda
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 
 
-
+routes.get('/insumos', authorization, autorizarAdmin, insumosControllers.buscar)
 export default routes;
