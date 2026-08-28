@@ -8,6 +8,7 @@ import postocoleta from './controllers/postocoleta.js'
 import autorizarAdmin from "./middleware/autorizarAdmin.js";
 import agendamentosControllers from "./controllers/agendamentosControllers.js";
 import insumosControllers from "./controllers/insumosControllers.js";
+import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
 
 
 const routes = express.Router();
@@ -54,4 +55,15 @@ routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMe
 
 
 routes.get('/insumos', authorization, autorizarAdmin, insumosControllers.buscar)
+
+
+//rota solicitaçao
+routes.post('/solicitacoes',authorization,solicitacaoControllers.createSolicitacao);
+
+
+routes.get('/solicitacoes',authorization,solicitacaoControllers.buscarSolicitacoes);
+
+
+routes.patch('/solicitacoes/:id',authorization,solicitacaoControllers.alterarStatus);
+
 export default routes;
