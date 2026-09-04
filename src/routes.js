@@ -61,9 +61,26 @@ routes.get('/insumos', authorization, autorizarAdmin, insumosControllers.buscar)
 routes.post('/solicitacoes',authorization,solicitacaoControllers.createSolicitacao);
 
 
-routes.get('/solicitacoes',authorization,solicitacaoControllers.buscarSolicitacoes);
+routes.get('/pendentes',authorization,autorizarAdmin,solicitacaoControllers.buscarprescricoespendetes);
 
+routes.get(
+    "/solicitacao/:id/prescricao",authorization, autorizarAdmin,
+    solicitacaoControllers.buscarPrescricao
+);
+routes.get(
+  "/solicitacao/:id",
+  authorization,
+  autorizarAdmin,
+  solicitacaoControllers.buscarSolicitacaoPorId
+);
 
-routes.patch('/solicitacoes/:id',authorization,solicitacaoControllers.alterarStatus);
+routes.patch(
+  "/solicitacao/:id/reenvio",
+  authorization,
+  autorizarAdmin,
+  solicitacaoControllers.pedirReenvio
+);
+
+routes.patch('/solicitacoes/:id',authorization,autorizarAdmin,solicitacaoControllers.alterarStatus);
 
 export default routes;

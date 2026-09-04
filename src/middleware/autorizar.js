@@ -11,6 +11,11 @@ export default (req, res, next) => {
         if(!authHeader) {
             return res.status(401).send({error: 'Token não fornecido'});
         }
+
+        console.log(
+    "ACCESS_TOKEN_SECRET existe?",
+    !!process.env.ACCESS_TOKEN_SECRET
+);
         const partsToken = authHeader.split(' ');
          console.log("Partes do token:", partsToken.length);
         if (partsToken.length !=2){

@@ -51,6 +51,7 @@ const pac_id = req.session.id;
             const imagemBuffer = Buffer.from(
                 sol_prescricao,
                 'base64'
+                
             );
 
 
@@ -113,67 +114,73 @@ const pac_id = req.session.id;
     },
 
 
-    async buscarSolicitacoes(req, res) {
+   async buscarprescricoespendetes(req, res) {
+    try {
 
-        try {
+        const solicitacoes = await knex("solicitacao as sol")
+            .innerJoin(
+                "pacientes as pac",
+                "pac.pac_id",
+                "sol.pac_id"
+            )
+            .select(
+                "sol.sol_id",
+                "sol.pac_id",
+                "sol.sol_status",
+                "sol.sol_data_solicitacao",
+                "pac.pac_nome",
+                "pac.pac_cpf"
+            )
+            .where("sol.sol_status", "Pendente")
+            .orderBy("sol.sol_data_solicitacao", "asc");
 
-            const resultado =
-                await knex('solicitacao as sol')
-                    .join(
-                        'postosdesaude as pos',
-                        'pos.pos_id',
-                        'sol.pos_id'
-                    )
-                    .join(
-                        'pacientes as pac',
-                        'pac.pac_id',
-                        'sol.pac_id'
-                    )
-                    .select(
-                        'sol.sol_id',
-                        'sol.sol_data_solicitacao',
-                        'sol.sol_status',
-                        'sol.sol_observacao',
-                        'sol.sol_prescricao',
-                        'pac.pac_id',
-                        'pac.pac_nome',
-                        'pos.pos_id',
-                        'pos.pos_nome'
-                    );
+        console.log("Solicitações encontradas:", solicitacoes);
 
+        return res.status(200).json(solicitacoes);
 
-            const solicitacoes =
-                resultado.map(item => ({
+    } catch (error) {
 
-                    ...item,
+        console.error("ERRO NO /PENDENTES:", error);
 
-                    sol_prescricao:
-                        item.sol_prescricao
-                            ? item.sol_prescricao
-                                .toString('base64')
-                            : null
+        return res.status(500).json({
+            error: error.message
+        });
+    }
+},
 
-                }));
+async buscarPrescricao(req, res) {
+    try {
+        const { id } = req.params;
 
+        const solicitacao = await knex("solicitacao")
+            .select("sol_prescricao")
+            .where("sol_id", id)
+            .first();
 
-            return res.status(200).json(
-                solicitacoes
-            );
-
-
-        } catch (error) {
-
-            console.error(
-                'Erro ao buscar solicitações:',
-                error
-            );
-
-            return res.status(500).json({
-                error: error.message
+        if (!solicitacao) {
+            return res.status(404).json({
+                error: "Solicitação não encontrada"
             });
         }
-    },
 
+        if (!solicitacao.sol_prescricao) {
+            return res.status(404).json({
+                error: "Prescrição não encontrada"
+            });
+        }
+
+        res.setHeader("Content-Type", "image/png");
+
+        return res.send(solicitacao.sol_prescricao);
+
+    } catch (error) {
+        console.error("Erro ao buscar prescrição:", error);
+
+        return res.status(500).json({
+            error: error.message
+        });
+    }
+},
 
     async alterarStatus(req, res) {
 
@@ -212,6 +219,108 @@ const pac_id = req.session.id;
                 error: error.message
             });
         }
+    },
+async buscarSolicitacaoPorId(req, res) {
+  try {
+    const { id } = req.params;
+
+    const solicitacao = await knex("solicitacao as sol")
+      .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
+      .innerJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
+      .select(
+        "sol.sol_id",
+        "sol.pac_id",
+        "sol.pos_id",
+        "sol.sol_data_solicitacao",
+        "sol.sol_status",
+        "sol.sol_observacao",
+
+        "pac.pac_nome",
+        "pac.pac_cpf",
+
+        "pos.pos_nome"
+      )
+      .where("sol.sol_id", id)
+      .first();
+
+    if (!solicitacao) {
+      return res.status(404).json({
+        error: "Solicitação não encontrada"
+      });
     }
 
+    return res.status(200).json(solicitacao);
+
+  } catch (error) {
+
+    console.error(
+      "Erro ao buscar solicitação:",
+      error
+    );
+
+    return res.status(500).json({
+      error: error.message
+    });
+  }
+},
+async pedirReenvio(req, res) {
+  try {
+
+    const { id } = req.params;
+    const { motivo } = req.body;
+
+    if (!motivo) {
+      return res.status(400).json({
+        error: "Motivo do reenvio é obrigatório"
+      });
+    }
+
+    const motivosValidos = [
+      "FOTO_SEM_QUALIDADE",
+      "PRESCRICAO_VENCIDA",
+      "INFORMACAO_DIFERENTE",
+      "OUTRO"
+    ];
+
+    if (!motivosValidos.includes(motivo)) {
+      return res.status(400).json({
+        error: "Motivo inválido"
+      });
+    }
+
+    const [solicitacao] = await knex("solicitacao")
+      .where("sol_id", id)
+      .update({
+        sol_status: "Reenvio",
+        sol_motivo_reenvio: motivo
+      })
+      .returning([
+        "sol_id",
+        "sol_status",
+        "sol_motivo_reenvio"
+      ]);
+
+    if (!solicitacao) {
+      return res.status(404).json({
+        error: "Solicitação não encontrada"
+      });
+    }
+
+    return res.status(200).json({
+      message: "Pedido de reenvio enviado com sucesso",
+      solicitacao
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Erro ao pedir reenvio:",
+      error
+    );
+
+    return res.status(500).json({
+      error: error.message
+    });
+  }
+},
 };
