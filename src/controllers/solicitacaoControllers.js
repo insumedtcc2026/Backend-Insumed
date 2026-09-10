@@ -201,7 +201,7 @@ async buscarPrescricao(req, res) {
             await knex('solicitacao')
                 .where('sol_id', id)
                 .update({
-                    sol_status
+                    sol_status: sol_status
                 });
 
 
