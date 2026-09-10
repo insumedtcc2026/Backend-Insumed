@@ -81,6 +81,6 @@ routes.patch(
   solicitacaoControllers.pedirReenvio
 );
 
-routes.patch('/solicitacoes/:id',authorization,autorizarAdmin,solicitacaoControllers.alterarStatus);
+routes.patch('/solicitacao/:id',authorization,autorizarAdmin,solicitacaoControllers.alterarStatus);
 
 export default routes;
