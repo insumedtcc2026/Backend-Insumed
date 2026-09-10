@@ -292,7 +292,7 @@ async pedirReenvio(req, res) {
       .where("sol_id", id)
       .update({
         sol_status: "Reenvio",
-        sol_motivo_reenvio: motivo
+        sol_motivo_reenvio: motivosValidos
       })
       .returning([
         "sol_id",
