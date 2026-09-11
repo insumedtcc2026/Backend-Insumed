@@ -75,7 +75,7 @@ routes.get(
 );
 
 // busca de prescriçoes atraves do id do paciente
-routes.get("/solicitacao/pacienteid/:id", authorization, solicitacaoControllers.prescicaodopaciente);
+routes.get("/solicitacao/pacienteid", authorization, solicitacaoControllers.prescicaodopaciente);
 
 routes.patch(
   "/solicitacao/:id/reenvio",
