@@ -181,6 +181,27 @@ async buscarPrescricao(req, res) {
         });
     }
 },
+   // Buscar prescrições atraves do id do paciente
+        async prescicaodopaciente (req,res){
+          try {
+            const buscapac = await knex('solicitacao as sol')
+            .innerJoin("pacientes [pac]", "pac.pac_id", "sol.pac_id")
+            .select(
+                "sol.sol_id",
+                "sol.sol_data_solicitacao",
+                "sol.sol_status",
+                "sol.sol_observacao",
+                "sol.sol_prescricao",
+            )
+            .where("sol.pac_id", req.session.id)
+            .orderBy("sol.sol_data_solicitacao", "desc");
+            return res.status(200).json(buscapac);
+            
+          }  catch (error){
+            console.error("Erro ao buscar prescrições", error)
+            return res.status(500).json({error: error.message})
+          }
+        },
 
     async alterarStatus(req, res) {
 
