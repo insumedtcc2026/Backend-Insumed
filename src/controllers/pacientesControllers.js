@@ -98,7 +98,7 @@ export default {
         const senhaValida = await bcrypt.compare(senha, paciente.pac_senha);
         if (senhaValida) {
           const token = jsonwebtoken.sign(
-            { id: paciente.pac_id || paciente.id, email: paciente.pac_email, tipo: 'PACIENTE' },
+            { id: paciente.pac_id || paciente.id,pac_id: paciente.pac_id || paciente.id, email: paciente.pac_email, tipo: 'PACIENTE' },
             secret,
             { expiresIn: '7d' }
           );

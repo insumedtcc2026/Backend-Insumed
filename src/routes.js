@@ -66,7 +66,9 @@ routes.get('/pendentes',authorization,autorizarAdmin,solicitacaoControllers.busc
 routes.get(
     "/solicitacao/:id/prescricao",authorization, autorizarAdmin,
     solicitacaoControllers.buscarPrescricao
-);
+  );
+routes.get("/solicitacao/pacienteid", authorization, solicitacaoControllers.prescicaodopaciente);
+// busca de prescriçoes atraves do id do paciente
 routes.get(
   "/solicitacao/:id",
   authorization,
@@ -74,8 +76,6 @@ routes.get(
   solicitacaoControllers.buscarSolicitacaoPorId
 );
 
-// busca de prescriçoes atraves do id do paciente
-routes.get("/solicitacao/pacienteid", authorization, solicitacaoControllers.prescicaodopaciente);
 
 routes.patch(
   "/solicitacao/:id/reenvio",
