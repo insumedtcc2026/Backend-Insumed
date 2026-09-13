@@ -182,25 +182,71 @@ async buscarPrescricao(req, res) {
     }
 },
    // Buscar prescrições atraves do id do paciente
-        async prescicaodopaciente (req,res){
-          try {
-            const buscapac = await knex('solicitacao as sol')
-            .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
-            .select(
-                "sol.sol_id",
-                "sol.sol_data_solicitacao",
-                "sol.sol_status",
-                "sol.sol_observacao"
-            )
-            .where("sol.pac_id", req.session.id)
-            .orderBy("sol.sol_data_solicitacao", "desc");
-            return res.status(200).json(buscapac);
-            
-          }  catch (error){
-            console.error("Erro ao buscar prescrições", error)
-            return res.status(500).json({error: error.message})
-          }
-        },
+        async prescicaodopaciente (req, res) {
+  try {
+    const buscapac = await knex('solicitacao as sol')
+      .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
+      .select(
+          "sol.sol_id",
+          "sol.sol_data_solicitacao",
+          "sol.sol_status",
+          "sol.sol_observacao",
+          knex.raw("(sol.sol_prescricao IS NOT NULL) as tem_prescricao")
+      )
+      .where("sol.pac_id", req.session.id)
+      .orderBy("sol.sol_data_solicitacao", "desc");
+
+    return res.status(200).json(buscapac);
+  } catch (error) {
+    console.error("Erro ao buscar prescrições", error);
+    return res.status(500).json({ error: error.message });
+  }
+},
+async detalhesPrescricaoPaciente(req, res) {
+  try {
+    const { id } = req.params;
+    const pac_id = req.session.id;
+
+    const solicitacao = await knex("solicitacao")
+      .select(
+        "sol_id",
+        "pac_id",
+        "sol_status",
+        "sol_data_solicitacao",
+        "sol_observacao",
+        "sol_prescricao"
+      )
+      .where("sol_id", id)
+      .first();
+
+    if (!solicitacao) {
+      return res.status(404).json({
+        error: "Solicitação não encontrada"
+      });
+    }
+
+    // Garante que o paciente só veja a própria solicitação
+    if (solicitacao.pac_id !== pac_id) {
+      return res.status(403).json({
+        error: "Prescrição não se refere a este paciente"
+      });
+    }
+
+    return res.status(200).json({
+      sol_id: solicitacao.sol_id,
+      sol_status: solicitacao.sol_status,
+      sol_data_solicitacao: solicitacao.sol_data_solicitacao,
+      sol_observacao: solicitacao.sol_observacao,
+      sol_prescricao_base64: solicitacao.sol_prescricao
+        ? solicitacao.sol_prescricao.toString('base64')
+        : null
+    });
+
+  } catch (error) {
+    console.error("Erro ao buscar detalhes da prescrição:", error);
+    return res.status(500).json({ error: error.message });
+  }
+},
 
     async alterarStatus(req, res) {
 

@@ -67,8 +67,13 @@ routes.get(
     "/solicitacao/:id/prescricao",authorization, autorizarAdmin,
     solicitacaoControllers.buscarPrescricao
   );
+  // busca de prescriçoes atraves do id do paciente
 routes.get("/solicitacao/pacienteid", authorization, solicitacaoControllers.prescicaodopaciente);
-// busca de prescriçoes atraves do id do paciente
+routes.get(
+  "/solicitacao/:id/detalhes",
+  authorization,
+  solicitacaoControllers.detalhesPrescricaoPaciente
+);
 routes.get(
   "/solicitacao/:id",
   authorization,
