@@ -3,115 +3,60 @@ import knex from './../database/index.js';
 export default {
 
     async createSolicitacao(req, res) {
+    try {
+        const pac_id = req.session.id;
 
-        try {
-
-            // ==========================
-            // PACIENTE VEM DO JWT
-            // ==========================
-const pac_id = req.session.id;
-
-
-            if (!pac_id) {
-                return res.status(401).json({
-                    error: 'Paciente não identificado'
-                });
-            }
-
-
-            // ==========================
-            // DADOS ENVIADOS PELO FRONT
-            // ==========================
-
-            const {
-                pos_id,
-                sol_prescricao,
-                sol_observacao
-            } = req.body;
-
-
-            if (!pos_id) {
-                return res.status(400).json({
-                    error: 'Posto de saúde não informado'
-                });
-            }
-
-
-            if (!sol_prescricao) {
-                return res.status(400).json({
-                    error: 'Prescrição não fornecida'
-                });
-            }
-
-
-            // ==========================
-            // CONVERTE BASE64
-            // ==========================
-
-            const imagemBuffer = Buffer.from(
-                sol_prescricao,
-                'base64'
-                
-            );
-
-
-            // ==========================
-            // SALVA SOLICITAÇÃO
-            // ==========================
-
-            const [solicitacao] =
-                await knex('solicitacao')
-                    .insert({
-
-                        pac_id: pac_id,
-
-                        pos_id: pos_id,
-
-                        sol_prescricao:
-                            imagemBuffer,
-
-                        sol_observacao:
-                            sol_observacao || null,
-
-                        sol_status:
-                            'Pendente',
-                            
-                                    sol_insumo_quant: 0
-
-
-                    })
-                    .returning([
-                        'sol_id',
-                        'pac_id',
-                        'pos_id',
-                        'sol_data_solicitacao',
-                        'sol_status',
-                        'sol_observacao'
-                    ]);
-
-
-            return res.status(201).json({
-
-                message:
-                    'Solicitação enviada com sucesso',
-
-                solicitacao
-
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                'Erro ao criar solicitação:',
-                error
-            );
-
-            return res.status(500).json({
-                error: error.message
-            });
+        if (!pac_id) {
+            return res.status(401).json({ error: 'Paciente não identificado' });
         }
-    },
+
+        const {
+            pos_id,
+            sol_prescricao,
+            sol_observacao,
+            sol_prescricao_tipo
+        } = req.body;
+
+        if (!pos_id) {
+            return res.status(400).json({ error: 'Posto de saúde não informado' });
+        }
+
+        if (!sol_prescricao) {
+            return res.status(400).json({ error: 'Prescrição não fornecida' });
+        }
+
+        const imagemBuffer = Buffer.from(sol_prescricao, 'base64');
+
+        const [solicitacao] =
+            await knex('solicitacao')
+                .insert({
+                    pac_id: pac_id,
+                    pos_id: pos_id,
+                    sol_prescricao: imagemBuffer,
+                    sol_prescricao_tipo: sol_prescricao_tipo || null, // NOVO
+                    sol_observacao: sol_observacao || null,
+                    sol_status: 'Pendente',
+                    sol_insumo_quant: 0
+                })
+                .returning([
+                    'sol_id',
+                    'pac_id',
+                    'pos_id',
+                    'sol_data_solicitacao',
+                    'sol_status',
+                    'sol_observacao'
+                ]);
+
+        return res.status(201).json({
+            message: 'Solicitação enviada com sucesso',
+            solicitacao
+        });
+
+    } catch (error) {
+        console.error('Erro ao criar solicitação:', error);
+        return res.status(500).json({ error: error.message });
+    }
+},
 
 
    async buscarprescricoespendetes(req, res) {
@@ -182,7 +127,7 @@ async buscarPrescricao(req, res) {
     }
 },
    // Buscar prescrições atraves do id do paciente
-        async prescicaodopaciente (req, res) {
+ async prescicaodopaciente (req, res) {
   try {
     const buscapac = await knex('solicitacao as sol')
       .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
@@ -191,6 +136,7 @@ async buscarPrescricao(req, res) {
           "sol.sol_data_solicitacao",
           "sol.sol_status",
           "sol.sol_observacao",
+          "sol.sol_prescricao_tipo", // NOVO
           knex.raw("(sol.sol_prescricao IS NOT NULL) as tem_prescricao")
       )
       .where("sol.pac_id", req.session.id)
@@ -202,6 +148,7 @@ async buscarPrescricao(req, res) {
     return res.status(500).json({ error: error.message });
   }
 },
+
 async detalhesPrescricaoPaciente(req, res) {
   try {
     const { id } = req.params;
@@ -214,22 +161,18 @@ async detalhesPrescricaoPaciente(req, res) {
         "sol_status",
         "sol_data_solicitacao",
         "sol_observacao",
-        "sol_prescricao"
+        "sol_prescricao",
+        "sol_prescricao_tipo" // NOVO
       )
       .where("sol_id", id)
       .first();
 
     if (!solicitacao) {
-      return res.status(404).json({
-        error: "Solicitação não encontrada"
-      });
+      return res.status(404).json({ error: "Solicitação não encontrada" });
     }
 
-    // Garante que o paciente só veja a própria solicitação
     if (solicitacao.pac_id !== pac_id) {
-      return res.status(403).json({
-        error: "Prescrição não se refere a este paciente"
-      });
+      return res.status(403).json({ error: "Prescrição não se refere a este paciente" });
     }
 
     return res.status(200).json({
@@ -237,6 +180,7 @@ async detalhesPrescricaoPaciente(req, res) {
       sol_status: solicitacao.sol_status,
       sol_data_solicitacao: solicitacao.sol_data_solicitacao,
       sol_observacao: solicitacao.sol_observacao,
+      sol_prescricao_mimetype: solicitacao.sol_prescricao_tipo || null, // NOVO
       sol_prescricao_base64: solicitacao.sol_prescricao
         ? solicitacao.sol_prescricao.toString('base64')
         : null
