@@ -279,6 +279,12 @@ async buscarHistoricoPrescricoes(req, res) {
     try {
 
         const historico = await knex("solicitacao as sol")
+
+        const status = await knex("solicitacao")
+    .select("sol_id", "sol_status")
+    .orderBy("sol_id", "asc");
+
+console.log("BANCO USADO:", status)
             .innerJoin(
                 "pacientes as pac",
                 "pac.pac_id",
@@ -311,7 +317,7 @@ async buscarHistoricoPrescricoes(req, res) {
                 "pos.pos_nome"
             )
             .whereIn("sol.sol_status", [
-                "Autorizada",
+                "Aprovado",
                 "Reenvio"
             ])
            
@@ -362,7 +368,7 @@ async pedirReenvio(req, res) {
       .where("sol_id", id)
       .update({
         sol_status: "Reenvio",
-        sol_motivo_reenvio: motivosValidos
+        sol_motivo_reenvio: motivo
       })
       .returning([
         "sol_id",
