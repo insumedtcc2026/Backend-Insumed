@@ -280,11 +280,8 @@ async buscarHistoricoPrescricoes(req, res) {
 
         const historico = await knex("solicitacao as sol")
 
-        const status = await knex("solicitacao")
-    .select("sol_id", "sol_status")
-    .orderBy("sol_id", "asc");
+        
 
-console.log("BANCO USADO:", status)
             .innerJoin(
                 "pacientes as pac",
                 "pac.pac_id",
@@ -334,7 +331,10 @@ console.log("BANCO USADO:", status)
         return res.status(500).json({
             error: error.message
         });
+
+        
     }
+  
 },
 
 
