@@ -314,10 +314,7 @@ async buscarHistoricoPrescricoes(req, res) {
                 "Autorizada",
                 "Reenvio"
             ])
-            .orderBy(
-                "sol.sol_data_analise",
-                "desc"
-            );
+           
 
         return res.status(200).json(historico);
 
