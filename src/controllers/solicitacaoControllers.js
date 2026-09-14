@@ -273,6 +273,69 @@ async buscarSolicitacaoPorId(req, res) {
     });
   }
 },
+
+//buscar historico das prescrições 
+async buscarHistoricoPrescricoes(req, res) {
+    try {
+
+        const historico = await knex("solicitacao as sol")
+            .innerJoin(
+                "pacientes as pac",
+                "pac.pac_id",
+                "sol.pac_id"
+            )
+            .leftJoin(
+                "insumo as ins",
+                "ins.ins_id",
+                "sol.ins_id"
+            )
+            .leftJoin(
+                "postosdesaude as pos",
+                "pos.pos_id",
+                "sol.pos_id"
+            )
+            .select(
+                "sol.sol_id",
+                "sol.pac_id",
+                "sol.sol_status",
+                "sol.sol_data_solicitacao",
+                
+                "sol.sol_motivo_reenvio",
+                "sol.sol_observacao",
+                "sol.sol_prescricao_tipo",
+
+                "pac.pac_nome",
+                "pac.pac_cpf",
+
+                "ins.ins_nome",
+                "pos.pos_nome"
+            )
+            .whereIn("sol.sol_status", [
+                "Autorizada",
+                "Reenvio"
+            ])
+            .orderBy(
+                "sol.sol_data_analise",
+                "desc"
+            );
+
+        return res.status(200).json(historico);
+
+    } catch (error) {
+
+        console.error(
+            "Erro ao buscar histórico:",
+            error
+        );
+
+        return res.status(500).json({
+            error: error.message
+        });
+    }
+},
+
+
+
 async pedirReenvio(req, res) {
   try {
 
@@ -332,5 +395,7 @@ async pedirReenvio(req, res) {
       error: error.message
     });
   }
+
+  
 },
 };

@@ -70,23 +70,19 @@ routes.get(
   // busca de prescriçoes atraves do id do paciente
 routes.get("/solicitacao/pacienteid", authorization, solicitacaoControllers.prescicaodopaciente);
 routes.get(
-  "/solicitacao/:id/detalhes",
-  authorization,
-  solicitacaoControllers.detalhesPrescricaoPaciente
+  "/solicitacao/:id/detalhes",authorization,solicitacaoControllers.detalhesPrescricaoPaciente
 );
 routes.get(
-  "/solicitacao/:id",
-  authorization,
-  autorizarAdmin,
-  solicitacaoControllers.buscarSolicitacaoPorId
+  "/solicitacao/:id",authorization,autorizarAdmin,solicitacaoControllers.buscarSolicitacaoPorId
 );
 
 
 routes.patch(
-  "/solicitacao/:id/reenvio",
-  authorization,
-  autorizarAdmin,
-  solicitacaoControllers.pedirReenvio
+  "/solicitacao/:id/reenvio",authorization,autorizarAdmin,solicitacaoControllers.pedirReenvio
+);
+
+routes.get(
+    "/prescricoes/historico",solicitacaoControllers.buscarHistoricoPrescricoes
 );
 
 routes.patch('/solicitacao/:id',authorization,autorizarAdmin,solicitacaoControllers.alterarStatus);
