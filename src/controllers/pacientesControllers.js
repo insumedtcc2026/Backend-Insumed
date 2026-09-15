@@ -81,23 +81,25 @@ export default {
       if (!telefone || !regexTelefone.test(telefone)) {
   return res.status(400).json({
     sucesso: false,
-    erros: ["Telefone inválido. Use (24) 99999-9999 ou 24999999999"]
+    error: ["Telefone inválido. Use (24) 99999-9999 ou 24999999999"]
   });
 }
 
       if (!email || !regexEmail.test(email)) {
   return res.status(400).json({
     sucesso: false,
-    erros: ["E-mail inválido"]
+    error: ["E-mail inválido"]
   });
 }
   const emailExistente = await knex('pacientes')
  .where('pac_email', email).first();
    
  if (emailExistente) {
+    console.log("E-mail já cadastrado:", email);
   return res.status(400).json({
+    
     sucesso: false,
-    erros: ["E-mail já cadastrado"],
+    error: ["E-mail já cadastrado"],
   })
   console.log("E-mail já cadastrado:", email);
 }
@@ -105,19 +107,18 @@ export default {
 if (!cep || !regexCep.test(cep)) {
   return res.status(400).json({
     sucesso: false,
-    erros: ["CEP inválido"]
+    error: ["CEP inválido"]
   });
 }
 
 // Validação do CPF
 if (!cpf || !regexCpf.test(cpf)) {
+    console.log("CPF inválido!");
   return res.status(400).json({
     sucesso: false,
-    erros: ["CPF inválido"]
+    error: ["CPF inválido"]
   });
 }
-
-
       await knex('pacientes').insert(dadoscreate);
 
       return res.status(201).json({ msg: "Usuário cadastrado com êxito" });
