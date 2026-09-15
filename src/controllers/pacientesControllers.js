@@ -71,6 +71,53 @@ export default {
         pac_cep: cep || null,
       };
 
+        // Fazendo as validaçoe do email, cep e cpf
+
+      const regexEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const regexCep = /^\d{5}-?\d{3}$/;
+      const regexCpf = /^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$/;
+      const regexTelefone = /^(?:\(\d{2}\) \d{5}-\d{4}|\d{11})$/;
+
+      if (!telefone || !regexTelefone.test(telefone)) {
+  return res.status(400).json({
+    sucesso: false,
+    erros: ["Telefone inválido. Use (24) 99999-9999 ou 24999999999"]
+  });
+}
+
+      if (!email || !regexEmail.test(email)) {
+  return res.status(400).json({
+    sucesso: false,
+    erros: ["E-mail inválido"]
+  });
+}
+  const emailExistente = await knex('pacientes')
+ .where('pac_email', email).first();
+   
+ if (emailExistente) {
+  return res.status(400).json({
+    sucesso: false,
+    erros: ["E-mail já cadastrado"],
+  })
+  console.log("E-mail já cadastrado:", email);
+}
+// Validação do Cep
+if (!cep || !regexCep.test(cep)) {
+  return res.status(400).json({
+    sucesso: false,
+    erros: ["CEP inválido"]
+  });
+}
+
+// Validação do CPF
+if (!cpf || !regexCpf.test(cpf)) {
+  return res.status(400).json({
+    sucesso: false,
+    erros: ["CPF inválido"]
+  });
+}
+
+
       await knex('pacientes').insert(dadoscreate);
 
       return res.status(201).json({ msg: "Usuário cadastrado com êxito" });
