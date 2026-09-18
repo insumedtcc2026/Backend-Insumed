@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentação da API - Insumed</title>
+    <style>
+        /* Variáveis de Cores Globais */
+        :root {
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --primary: #0284c7;
+            --get-color: #10b981;
+            --post-color: #eab308;
+            --error-color: #ef4444;
+            --border-color: #e2e8f0;
+            --code-bg: #1e1e2e;
+        }
+
+        /* Reset Básico */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Header */
+        .main-header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 40px 0;
+            border-bottom: 4px solid var(--primary);
+        }
+
+        .main-header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+
+        .main-header h1 span {
+            font-size: 1rem;
+            background-color: var(--primary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+
+        .main-header p {
+            color: #94a3b8;
+            margin-top: 5px;
+        }
+
+        /* Grid Layout */
+        .content-grid {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 40px;
+            margin-top: 40px;
+            margin-bottom: 60px;
+        }
+
+        /* Sidebar Navigation */
+        .sidebar {
+            position: sticky;
+            top: 20px;
+            height: fit-content;
+        }
+
+        .sidebar h3 {
+            font-size: 1.1rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+            margin-bottom: 15px;
+        }
+
+        .sidebar ul {
+            list-style: none;
+        }
+
+        .sidebar ul li a {
+            display: block;
+            padding: 10px 15px;
+            color: var(--text-main);
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            transition: background 0.2s ease;
+        }
+
+        .sidebar ul li a:hover {
+            background-color: var(--border-color);
+            color: var(--primary);
+        }
+
+        /* Cards dos Endpoints */
+        .endpoint-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+
+        .endpoint-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-family: monospace;
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+        }
+
+        .endpoint-header .method {
+            color: white;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+
+        /* Estilos de Métodos HTTP */
+        .endpoint-header.get { background-color: rgba(16, 185, 129, 0.1); color: var(--get-color); }
+        .endpoint-header.get .method { background-color: var(--get-color); }
+
+        .endpoint-header.post { background-color: rgba(234, 179, 8, 0.1); color: var(--post-color); }
+        .endpoint-header.post .method { background-color: var(--post-color); }
+
+        .description {
+            color: var(--text-muted);
+            margin-bottom: 20px;
+            font-size: 1.05rem;
+        }
+
+        h4 {
+            margin: 20px 0 10px 0;
+            font-size: 1rem;
+            color: var(--text-main);
+        }
+
+        /* Caixas de Resposta e Código */
+        .response-box {
+            border-left: 4px solid;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 0 6px 6px 0;
+        }
+
+        .response-box.success {
+            background-color: #f0fdf4;
+            border-color: var(--get-color);
+            color: #166534;
+        }
+
+        .response-box.error {
+            background-color: #fef2f2;
+            border-color: var(--error-color);
+            color: #991b1b;
+        }
+
+        pre {
+            background-color: var(--code-bg);
+            color: #cdd6f4;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.9rem;
+            margin-top: 10px;
+        }
+
+        /* Footer */
+        .main-footer {
+            text-align: center;
+            padding: 30px 0;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+            font-size: 0.9rem;
+        }
+
+        /* Responsividade */
+        @media (max-width: 768px) {
+            .content-grid {
+                grid-template-columns: 1fr;
+            }
+            .sidebar {
+                position: relative;
+                top: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header class="main-header">
+        <div class="container">
+            <h1>Insumed API <span>v1.0.0</span></h1>
+            <p>Documentação oficial das rotas e controladores do sistema de pacientes.</p>
+        </div>
+    </header>
+
+    <main class="container content-grid">
+        <aside class="sidebar">
+            <h3>Endpoints</h3>
+            <nav>
+                <ul>
+                    <li><a href="#raiz">GET /</a></li>
+                    <li><a href="#get-pacientes">GET /pacientesall</a></li>
+                    <li><a href="#post-pacientes">POST /pacientes</a></li>
+                </ul>
+            </nav>
+        </aside>
+
+        <section class="docs-body">
+            
+            <article id="raiz" class="endpoint-card">
+                <div class="endpoint-header get">
+                    <span class="method">GET</span>
+                    <span class="path">/</span>
+                </div>
+                <p class="description">Retorna a página de documentação da API.</p>
+                
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong> - Arquivo HTML renderizado com sucesso.
+                </div>
+            </article>
+
+            <article id="get-pacientes" class="endpoint-card">
+                <div class="endpoint-header get">
+                    <span class="method">GET</span>
+                    <span class="path">/pacientesall</span>
+                </div>
+                <p class="description">Busca todos os registros de pacientes armazenados no banco de dados.</p>
+                
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong>
+                    <pre><code>[
+  {
+    "pac_nome": "STRING" (VARCHAR (50)),
+    "pac_email": "STRING" (VARCHAR(60)),
+    "pac_telefone": "STRING" (VARCHAR(11)),
+    "pac_cpf": "STRING"(VARCHAR(11)),
+    "pac_data_nasc": "(AAAA-MM-DD)",
+    "pac_sexo": "CHECK(1)" (M OU F),
+    "pac_endereço": "STRING" (VARCHAR(100)),
+    "pac_raça": "STRING" (VARCHAR(10))
+  }
+]</code></pre>
+                </div>
+
+                <div class="response-box error">
+                    <strong>500 Internal Server Error</strong>
+                    <pre><code>{
+  "message": "STRING",
+  "error": "STRING"
+}</code></pre>
+                </div>
+            </article>
+
+            <article id="post-pacientes" class="endpoint-card">
+                <div class="endpoint-header post">
+                    <span class="method">POST</span>
+                    <span class="path">/pacientes</span>
+                </div>
+                <p class="description">Cadastra um novo paciente no sistema. A senha enviada é criptografada antes de ser salva.</p>
+                
+                <h4>Corpo da Requisição (JSON Format):</h4>
+                <pre><code>{
+  "pac_nome": "STRING" (VARCHAR (50)),
+    "pac_email": "STRING" (VARCHAR(60)),
+    "pac_telefone": "STRING" (VARCHAR(11)),
+    "pac_cpf": "STRING"(VARCHAR(11)),
+    "pac_data_nasc": "(AAAA-MM-DD)",
+    "pac_sexo": "CHECK(1)" (M OU F),
+    "pac_endereço": "STRING" (VARCHAR(100)),
+    "pac_raça": "STRING" (VARCHAR(10))
+}</code></pre>
+
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>201 Created</strong>
+                    <pre><code>{
+  "message": "STRING"
+}</code></pre>
+                </div>
+
+                <div class="response-box error">
+                    <strong>500 Internal Server Error</strong>
+                    <pre><code>{
+  "message": "STRING",
+  "error": "STRING"
+}</code></pre>
+                </div>
+            </article>
+
+        </section>
+    </main>
+
+    <footer class="main-footer">
+        <p>&copy; 2026 Insumed Backend. Todos os direitos reservados.</p>
+    </footer>
+
+</body>
+</html>
