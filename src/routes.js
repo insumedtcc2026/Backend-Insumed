@@ -9,6 +9,7 @@ import autorizarAdmin from "./middleware/autorizarAdmin.js";
 import agendamentosControllers from "./controllers/agendamentosControllers.js";
 import insumosControllers from "./controllers/insumosControllers.js";
 import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
+import autorizadorControllers from "./controllers/autorizadorControllers.js";
 
 
 const routes = express.Router();
@@ -41,7 +42,9 @@ routes.get('/administradorall', administradorControllers.administradorall);
 routes.post('/administrador', administradorControllers.createadministrador);
 
 //rotas prescritor
-routes.get('/prescritorall', prescritorControllers.prescritorall);
+routes.get('/autorizadorall', autorizadorControllers.autorizadorrall);
+routes.post('/autorizador', autorizadorControllers.createautorizador);
+
 
 //agendamento
 routes.get('/agendamentos', agendamentosControllers.listar);
