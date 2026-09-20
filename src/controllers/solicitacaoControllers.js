@@ -277,7 +277,6 @@ async buscarSolicitacaoPorId(req, res) {
 //buscar historico das prescrições 
 async buscarHistoricoPrescricoes(req, res) {
     try {
-          console.log("DADOS DO HISTÓRICO:", dados);
 
         const historico = await knex("solicitacao as sol")
 
