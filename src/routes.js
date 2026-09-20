@@ -2,7 +2,7 @@ import express, { Router } from "express";
 import pacientesControllers from './controllers/pacientesControllers.js'; // Adicionado .js
 import raizControllers from './controllers/raizControllers.js'; // Adicionado .js
 import administradorControllers from "./controllers/administradorControllers.js";
-import prescritorControllers from "./controllers/prescritorControllers.js";
+
 import authorization from './middleware/autorizar.js' // Se for descomentar depois, adicione aqui também!
 import postocoleta from './controllers/postocoleta.js'
 import autorizarAdmin from "./middleware/autorizarAdmin.js";
