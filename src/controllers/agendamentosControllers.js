@@ -470,6 +470,10 @@ export default {
                         'sol.pac_id',
                         req.session.id
                     )
+                    .whereIn(
+                        'sol.sol_status',
+                        ['agendado', 'concluido', 'cancelado']
+                    )
                     .select(
                         'sol.sol_id',
                         'sol.sol_data_de_coleta',
