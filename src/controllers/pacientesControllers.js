@@ -187,21 +187,21 @@ if (!cpf || !regexCpf.test(cpf)) {
         }
       }
 
-      // 2º Tenta Prescritor
-      const prescritor = await knex("prescritor").where({ pre_email: email }).first();
-      if (prescritor) {
-        const senhaValida = await bcrypt.compare(senha, prescritor.pre_senha);
+      // 2º Tenta autorizador
+      const autorizador = await knex("autorizador").where({ aut_email: email }).first();
+      if (autorizador) {
+        const senhaValida = await bcrypt.compare(senha, autorizador.aut_senha);
         if (senhaValida) {
           const token = jsonwebtoken.sign(
-            { id: prescritor.pre_id, email: prescritor.pre_email, tipo: 'PRESCRITOR' },
+            { id: autorizador.aut_id, email: autorizador.aut_email, tipo: 'AUTORIZADOR' },
             secret,
             { expiresIn: "7d" }
           );
           return res.status(200).json({
             msg: "Autenticação realizada com sucesso",
             token,
-            usuario: prescritor,
-            tipo: "PRESCRITOR"
+            usuario: autorizador,
+            tipo: "AUTORIZADOR"
           });
         }
       }
