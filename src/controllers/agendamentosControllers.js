@@ -243,7 +243,8 @@ export default {
                     pac_id: paciente.pac_id,
                     pos_id: posto.pos_id,
                     sol_data_de_coleta,
-                    sol_status: 'agendado'
+                    sol_status: 'agendado',
+                    sol_insumo_quant: 0
                 })
                 .returning('sol_id');
 
