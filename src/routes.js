@@ -47,14 +47,15 @@ routes.post('/autorizador', autorizadorControllers.createautorizador);
 
 
 //agendamento
-routes.get('/agendamentos', agendamentosControllers.listar);
-routes.post('/agendamentos', agendamentosControllers.criar);
+routes.get('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.listar);
+routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.criar);
 
 routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, 
 agendamentosControllers.concluir);
 routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, agendamentosControllers.cancelar);
 
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
+routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);
 
 
 routes.get('/insumos', authorization, autorizarAdmin, insumosControllers.buscar)
