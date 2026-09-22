@@ -86,7 +86,7 @@ routes.patch(
 );
 
 routes.get(
-    "/prescricoes/historico",authorization,autorizarAdmin,solicitacaoControllers.buscarHistoricoPrescricoes
+    "/prescricoes/historico",solicitacaoControllers.buscarHistoricoPrescricoes
 );
 
 routes.patch('/solicitacao/:id',authorization,autorizarAdmin,solicitacaoControllers.alterarStatus);
