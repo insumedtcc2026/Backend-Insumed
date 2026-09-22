@@ -26,7 +26,7 @@ export default {
         
         nome,
         email,
-        tel,
+        telefone,
         senha,
         cpf
       } = req.body;
@@ -37,7 +37,7 @@ export default {
         
         aut_nome: nome,
         aut_email: email,
-        aut_tel: tel,
+        aut_tel: telefone,
         aut_senha: hashSenha,
         aut_cpf: cpf,
       };
