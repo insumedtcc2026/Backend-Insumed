@@ -74,7 +74,8 @@ export default {
                 "sol.sol_status",
                 "sol.sol_data_solicitacao",
                 "pac.pac_nome",
-                "pac.pac_cpf"
+                "pac.pac_cpf",
+                "pac.pac_avatar"
             )
             .where("sol.sol_status", "Pendente")
             .orderBy("sol.sol_data_solicitacao", "asc");
