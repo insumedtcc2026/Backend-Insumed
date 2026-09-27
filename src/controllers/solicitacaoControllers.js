@@ -33,7 +33,7 @@ export default {
                     pac_id: pac_id,
                     pos_id: pos_id,
                     sol_prescricao: imagemBuffer,
-                    sol_prescricao_tipo: sol_prescricao_tipo || null, // NOVO
+                    sol_prescricao_tipo: sol_prescricao_tipo || null,
                     sol_observacao: sol_observacao || null,
                     sol_status: 'Pendente',
                     sol_insumo_quant: 0
@@ -61,8 +61,9 @@ export default {
 
    async buscarprescricoespendetes(req, res) {
     try {
+        const admin = req.session;
 
-        const solicitacoes = await knex("solicitacao as sol")
+        const query = knex("solicitacao as sol")
             .innerJoin(
                 "pacientes as pac",
                 "pac.pac_id",
@@ -71,6 +72,7 @@ export default {
             .select(
                 "sol.sol_id",
                 "sol.pac_id",
+                "sol.pos_id",
                 "sol.sol_status",
                 "sol.sol_data_solicitacao",
                 "pac.pac_nome",
@@ -79,6 +81,12 @@ export default {
             )
             .where("sol.sol_status", "Pendente")
             .orderBy("sol.sol_data_solicitacao", "asc");
+
+        if (!admin.tp_universal) {
+            query.andWhere("sol.pos_id", admin.posto_id);
+        }
+
+        const solicitacoes = await query;
 
         console.log("Solicitações encontradas:", solicitacoes);
 
@@ -137,7 +145,7 @@ async buscarPrescricao(req, res) {
           "sol.sol_data_solicitacao",
           "sol.sol_status",
           "sol.sol_observacao",
-          "sol.sol_prescricao_tipo", // NOVO
+          "sol.sol_prescricao_tipo",
           knex.raw("(sol.sol_prescricao IS NOT NULL) as tem_prescricao")
       )
       .where("sol.pac_id", req.session.id)
@@ -163,7 +171,7 @@ async detalhesPrescricaoPaciente(req, res) {
         "sol_data_solicitacao",
         "sol_observacao",
         "sol_prescricao",
-        "sol_prescricao_tipo" // NOVO
+        "sol_prescricao_tipo"
       )
       .where("sol_id", id)
       .first();
@@ -181,7 +189,7 @@ async detalhesPrescricaoPaciente(req, res) {
       sol_status: solicitacao.sol_status,
       sol_data_solicitacao: solicitacao.sol_data_solicitacao,
       sol_observacao: solicitacao.sol_observacao,
-      sol_prescricao_mimetype: solicitacao.sol_prescricao_tipo || null, // NOVO
+      sol_prescricao_mimetype: solicitacao.sol_prescricao_tipo || null,
       sol_prescricao_base64: solicitacao.sol_prescricao
         ? solicitacao.sol_prescricao.toString('base64')
         : null
@@ -278,11 +286,9 @@ async buscarSolicitacaoPorId(req, res) {
 //buscar historico das prescrições 
 async buscarHistoricoPrescricoes(req, res) {
     try {
+        const admin = req.session;
 
-        const historico = await knex("solicitacao as sol")
-
-        
-
+        const query = knex("solicitacao as sol")
             .innerJoin(
                 "pacientes as pac",
                 "pac.pac_id",
@@ -301,9 +307,10 @@ async buscarHistoricoPrescricoes(req, res) {
             .select(
                 "sol.sol_id",
                 "sol.pac_id",
+                "sol.pos_id",
                 "sol.sol_status",
                 "sol.sol_data_solicitacao",
-                
+
                 "sol.sol_motivo_reenvio",
                 "sol.sol_observacao",
                 "sol.sol_prescricao_tipo",
@@ -318,8 +325,13 @@ async buscarHistoricoPrescricoes(req, res) {
             .whereIn("sol.sol_status", [
                 "Aprovado",
                 "Reenvio"
-            ])
-           
+            ]);
+
+        if (!admin.tp_universal) {
+            query.andWhere("sol.pos_id", admin.posto_id);
+        }
+
+        const historico = await query;
 
         return res.status(200).json(historico);
 
@@ -334,12 +346,10 @@ async buscarHistoricoPrescricoes(req, res) {
             error: error.message
         });
 
-        
+
     }
-  
+
 },
-
-
 
 async pedirReenvio(req, res) {
   try {
@@ -401,6 +411,6 @@ async pedirReenvio(req, res) {
     });
   }
 
-  
+
 },
 };

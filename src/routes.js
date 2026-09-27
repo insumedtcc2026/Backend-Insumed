@@ -1,11 +1,12 @@
 import express, { Router } from "express";
-import pacientesControllers from './controllers/pacientesControllers.js'; // Adicionado .js
-import raizControllers from './controllers/raizControllers.js'; // Adicionado .js
+import pacientesControllers from './controllers/pacientesControllers.js'; 
+import raizControllers from './controllers/raizControllers.js'; 
 import administradorControllers from "./controllers/administradorControllers.js";
 
-import authorization from './middleware/autorizar.js' // Se for descomentar depois, adicione aqui também!
+import authorization from './middleware/autorizar.js' 
 import postocoleta from './controllers/postocoleta.js'
 import autorizarAdmin from "./middleware/autorizarAdmin.js";
+import validarAcessoSolicitacao from "./middleware/validarAcessoSolicitacao.js"; // NOVO
 import agendamentosControllers from "./controllers/agendamentosControllers.js";
 import insumosControllers from "./controllers/insumosControllers.js";
 import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
@@ -32,6 +33,8 @@ routes.get('/validar', authorization, (req, res)=>{
 });
 
 //Rotas do posto de coleta 
+
+routes.get('/postos/:id' , postocoleta.listarporid)
 routes.get('/postos' , postocoleta.listar)
 
 
@@ -61,34 +64,48 @@ routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.
 routes.get('/insumos', authorization, autorizarAdmin, insumosControllers.buscar)
 
 
-//rota solicitaçao
+//rotas solicitaçao
 routes.post('/solicitacoes',authorization,solicitacaoControllers.createSolicitacao);
-
 
 routes.get('/pendentes',authorization,autorizarAdmin,solicitacaoControllers.buscarprescricoespendetes);
 
 routes.get(
-    "/solicitacao/:id/prescricao",authorization, autorizarAdmin,
+    "/solicitacao/:id/prescricao",
+    authorization, autorizarAdmin, validarAcessoSolicitacao,
     solicitacaoControllers.buscarPrescricao
   );
-  // busca de prescriçoes atraves do id do paciente
+
 routes.get("/solicitacao/pacienteid", authorization, solicitacaoControllers.prescicaodopaciente);
+
+
 routes.get(
   "/solicitacao/:id/detalhes",authorization,solicitacaoControllers.detalhesPrescricaoPaciente
 );
+
+
 routes.get(
-  "/solicitacao/:id",authorization,autorizarAdmin,solicitacaoControllers.buscarSolicitacaoPorId
+  "/solicitacao/:id",
+  authorization, autorizarAdmin, validarAcessoSolicitacao,
+  solicitacaoControllers.buscarSolicitacaoPorId
 );
 
 
 routes.patch(
-  "/solicitacao/:id/reenvio",authorization,autorizarAdmin,solicitacaoControllers.pedirReenvio
+  "/solicitacao/:id/reenvio",
+  authorization, autorizarAdmin, validarAcessoSolicitacao,
+  solicitacaoControllers.pedirReenvio
 );
 
 routes.get(
-    "/prescricoes/historico",solicitacaoControllers.buscarHistoricoPrescricoes
+    "/prescricoes/historico",
+    authorization, autorizarAdmin,
+    solicitacaoControllers.buscarHistoricoPrescricoes
 );
 
-routes.patch('/solicitacao/:id',authorization,autorizarAdmin,solicitacaoControllers.alterarStatus);
+routes.patch(
+  '/solicitacao/:id',
+  authorization, autorizarAdmin, validarAcessoSolicitacao,
+  solicitacaoControllers.alterarStatus
+);
 
 export default routes;
