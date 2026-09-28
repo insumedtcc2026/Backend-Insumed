@@ -24,7 +24,7 @@ routes.post('/pacientes', pacientesControllers.createpaciente);
 
 routes.get('/pacientes', authorization, autorizarAdmin, pacientesControllers.buscarPorCpf);
 
-routes.post('/login',pacientesControllers.login)
+routes.post('/login',administradorControllers.loginGeral)
 
 //Rota de Validação de Token
 routes.get('/validar', authorization, (req, res)=>{

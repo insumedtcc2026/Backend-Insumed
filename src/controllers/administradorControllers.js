@@ -54,7 +54,7 @@ async createadministrador(req, res) {
         return res.status(400).json({ erro: 'Posto inválido' });
       }
     }
-    console.log("ID DO ADMIN:", admin.adm_id); console.log("POSTO DO ADMIN:", admin.pos_id); console.log("ADMIN UNIVERSAL:", admin.tp_universal);
+    
 
     const hashSenha = await bcrypt.hash(senha, 10);
 
@@ -85,6 +85,141 @@ async createadministrador(req, res) {
       error: error.message
     });
   }
+},
+
+
+async loginGeral(req, res) {
+    try {
+        const { email, senha } = req.body;
+
+        if (!email || !senha) {
+            return res.status(400).json({
+                erro: "E-mail e senha são obrigatórios"
+            });
+        }
+
+        const secret = process.env.ACCESS_TOKEN_SECRET;
+
+        if (!secret) {
+            console.error("ACCESS_TOKEN_SECRET não configurada");
+            return res.status(500).json({
+                erro: "Chave de autenticação não configurada"
+            });
+        }
+
+        // ==========================================
+        // 1. TENTA LOGIN COMO ADMINISTRADOR
+        // ==========================================
+
+        const admin = await knex("administrador")
+            .where("adm_email", email)
+            .first();
+
+        if (admin) {
+            const senhaValida = await bcrypt.compare(
+                senha,
+                admin.adm_senha
+            );
+
+            if (senhaValida) {
+
+                const token = jsonwebtoken.sign(
+                    {
+                        id: admin.adm_id,
+                        email: admin.adm_email,
+                        posto_id: admin.pos_id,
+                        tp_universal: admin.tp_universal,
+                        tipo: "ADMIN"
+                    },
+                    secret,
+                    {
+                        expiresIn: "7d"
+                    }
+                );
+
+                return res.status(200).json({
+                    msg: "Autenticação realizada com sucesso",
+                    token,
+
+                    usuario: {
+                        id: admin.adm_id,
+                        email: admin.adm_email,
+                        nome: admin.adm_nome,
+                        matricula: admin.adm_matricula,
+                        telefone: admin.adm_tel,
+                        cpf: admin.adm_cpf,
+                        posto_id: admin.pos_id,
+                        tp_universal: admin.tp_universal,
+                        tipo: "ADMIN"
+                    },
+
+                    tipo: "ADMIN"
+                });
+            }
+        }
+
+        // ==========================================
+        // 2. TENTA LOGIN COMO PACIENTE
+        // ==========================================
+
+        const paciente = await knex("pacientes")
+            .where("pac_email", email)
+            .first();
+
+        if (paciente) {
+            const senhaValida = await bcrypt.compare(
+                senha,
+                paciente.pac_senha
+            );
+
+            if (senhaValida) {
+
+                const token = jsonwebtoken.sign(
+                    {
+                        id: paciente.pac_id,
+                        email: paciente.pac_email,
+                        tipo: "PACIENTE"
+                    },
+                    secret,
+                    {
+                        expiresIn: "7d"
+                    }
+                );
+
+                return res.status(200).json({
+                    msg: "Autenticação realizada com sucesso",
+                    token,
+
+                    usuario: {
+                        id: paciente.pac_id,
+                        nome: paciente.pac_nome,
+                        email: paciente.pac_email,
+                        telefone: paciente.pac_telefone,
+                        cpf: paciente.pac_cpf,
+                        tipo: "PACIENTE"
+                    },
+
+                    tipo: "PACIENTE"
+                });
+            }
+        }
+
+        // ==========================================
+        // NENHUM USUÁRIO ENCONTRADO
+        // ==========================================
+
+        return res.status(401).json({
+            msg: "E-mail ou senha inválidos"
+        });
+
+    } catch (error) {
+
+        console.error("ERRO NO LOGIN:", error);
+
+        return res.status(500).json({
+            erro: error.message
+        });
+    }
 },
 
    async login(req, res) {
