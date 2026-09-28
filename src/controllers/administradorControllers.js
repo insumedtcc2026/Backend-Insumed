@@ -54,6 +54,7 @@ async createadministrador(req, res) {
         return res.status(400).json({ erro: 'Posto inválido' });
       }
     }
+    console.log("ID DO ADMIN:", admin.adm_id); console.log("POSTO DO ADMIN:", admin.pos_id); console.log("ADMIN UNIVERSAL:", admin.tp_universal);
 
     const hashSenha = await bcrypt.hash(senha, 10);
 
