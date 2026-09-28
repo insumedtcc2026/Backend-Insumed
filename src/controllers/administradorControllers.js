@@ -142,15 +142,17 @@ async loginGeral(req, res) {
                     token,
 
                     usuario: {
-                        id: admin.adm_id,
-                        email: admin.adm_email,
-                        nome: admin.adm_nome,
-                        matricula: admin.adm_matricula,
-                        telefone: admin.adm_tel,
-                        cpf: admin.adm_cpf,
-                        posto_id: admin.pos_id,
-                        tp_universal: admin.tp_universal,
-                        tipo: "ADMIN"
+                         id: admin.adm_id,
+    pac_nome: admin.adm_nome,
+    pac_email: admin.adm_email,
+    nome: admin.adm_nome,
+    email: admin.adm_email,
+    matricula: admin.adm_matricula,
+    telefone: admin.adm_tel,
+    cpf: admin.adm_cpf,
+    posto_id: admin.pos_id,
+    tp_universal: admin.tp_universal,
+    tipo: "ADMIN"
                     },
 
                     tipo: "ADMIN"
