@@ -101,7 +101,7 @@ async createadministrador(req, res) {
         const senhaValida = await bcrypt.compare(senha, admin.adm_senha);
         if (senhaValida) {
           const token = jsonwebtoken.sign(
-            { id: admin.adm_id, email: admin.adm_email, posto: admin.pos_id, tp_universal: admin.tp_universal ,tipo: 'ADMIN' },
+            { id: admin.adm_id, email: admin.adm_email, posto_id: admin.pos_id, tp_universal: admin.tp_universal ,tipo: 'ADMIN' },
             secret,
             { expiresIn: "7d" }
           );
