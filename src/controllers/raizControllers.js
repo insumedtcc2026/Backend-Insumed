@@ -1,18 +1,20 @@
-import { error } from "console";
-import path, { dirname } from "path";
 
-export default {
-    raiz(req,res) {
-        const filePath = path.join(import.meta.dirname, '..','..','documents', 'api_documentacao.html');
-        
-        return res.sendFile(filePath, (err) => {
-            if (err) {
-                console.error('Erro ao enviar arquivo' , err);
-                res.status(err.status || 500).send ({
-                    msg: ' Erro ao carregar a pagina de documentação',
-                    error: err.message
-                });
-            }
-        });
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+class RaizController {
+  index(req, res) {
+    try {
+      const caminhoDoArquivo = path.resolve(__dirname, '../../public/index.html');
+      
+      return res.sendFile(caminhoDoArquivo);
+    } catch (error) {
+      return res.status(500).json({ erro: "Falha ao carregar a documentação." });
     }
-};
+  }
+}
+
+export default new RaizController();

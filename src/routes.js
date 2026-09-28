@@ -14,7 +14,7 @@ import autorizadorControllers from "./controllers/autorizadorControllers.js";
 
 const routes = express.Router();
 
-//routes.get('/', raizControllers.raiz);
+routes.get('/', raizControllers.index);
 
 // Rotas do paciente
 routes.get('/pacientesall', pacientesControllers.pacientesall);

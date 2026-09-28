@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Documentação da API - Insumed</title>
+    <title>Documentação da API - Sistema de Agendamentos e Coletas</title>
     <style>
         /* Variáveis de Cores Globais */
         :root {
@@ -14,6 +14,7 @@
             --primary: #0284c7;
             --get-color: #10b981;
             --post-color: #eab308;
+            --patch-color: #8b5cf6;
             --error-color: #ef4444;
             --border-color: #e2e8f0;
             --code-bg: #1e1e2e;
@@ -34,7 +35,7 @@
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
             padding: 0 20px;
         }
@@ -69,7 +70,7 @@
         /* Grid Layout */
         .content-grid {
             display: grid;
-            grid-template-columns: 250px 1fr;
+            grid-template-columns: 280px 1fr;
             gap: 40px;
             margin-top: 40px;
             margin-bottom: 60px;
@@ -79,28 +80,36 @@
         .sidebar {
             position: sticky;
             top: 20px;
-            height: fit-content;
+            height: calc(100vh - 40px);
+            overflow-y: auto;
         }
 
         .sidebar h3 {
-            font-size: 1.1rem;
+            font-size: 1rem;
             text-transform: uppercase;
             color: var(--text-muted);
             letter-spacing: 0.05em;
-            margin-bottom: 15px;
+            margin-bottom: 10px;
+            margin-top: 20px;
+        }
+        
+        .sidebar h3:first-child {
+            margin-top: 0;
         }
 
         .sidebar ul {
             list-style: none;
+            margin-bottom: 15px;
         }
 
         .sidebar ul li a {
             display: block;
-            padding: 10px 15px;
+            padding: 8px 15px;
             color: var(--text-main);
             text-decoration: none;
             border-radius: 6px;
             font-weight: 500;
+            font-size: 0.95rem;
             transition: background 0.2s ease;
         }
 
@@ -145,6 +154,9 @@
         .endpoint-header.post { background-color: rgba(234, 179, 8, 0.1); color: var(--post-color); }
         .endpoint-header.post .method { background-color: var(--post-color); }
 
+        .endpoint-header.patch { background-color: rgba(139, 92, 246, 0.1); color: var(--patch-color); }
+        .endpoint-header.patch .method { background-color: var(--patch-color); }
+
         .description {
             color: var(--text-muted);
             margin-bottom: 20px;
@@ -169,6 +181,12 @@
             background-color: #f0fdf4;
             border-color: var(--get-color);
             color: #166534;
+        }
+
+        .response-box.warning {
+            background-color: #fefce8;
+            border-color: var(--post-color);
+            color: #854d0e;
         }
 
         .response-box.error {
@@ -205,6 +223,7 @@
             .sidebar {
                 position: relative;
                 top: 0;
+                height: auto;
             }
         }
     </style>
@@ -214,67 +233,101 @@
     <header class="main-header">
         <div class="container">
             <h1>Insumed API <span>v1.0.0</span></h1>
-            <p>Documentação oficial das rotas e controladores do sistema de pacientes.</p>
+            <p>Documentação oficial das rotas e controladores do sistema de Agendamentos e Coletas.</p>
         </div>
     </header>
 
     <main class="container content-grid">
         <aside class="sidebar">
-            <h3>Endpoints</h3>
-            <nav>
-                <ul>
-                    <li><a href="#raiz">GET /</a></li>
-                    <li><a href="#get-pacientes">GET /pacientesall</a></li>
-                    <li><a href="#post-pacientes">POST /pacientes</a></li>
-                </ul>
-            </nav>
+            <h3>Autenticação</h3>
+            <ul>
+                <li><a href="#post-login">POST /login</a></li>
+            </ul>
+
+            <h3>Pacientes</h3>
+            <ul>
+                <li><a href="#get-pacientes">GET /pacientes</a></li>
+                <li><a href="#post-pacientes">POST /pacientes</a></li>
+                <li><a href="#get-pacientes-buscar">GET /pacientes/buscar</a></li>
+            </ul>
+
+            <h3>Agendamentos</h3>
+            <ul>
+                <li><a href="#get-agendamentos">GET /agendamentos</a></li>
+                <li><a href="#post-agendamentos">POST /agendamentos</a></li>
+                <li><a href="#patch-agendamentos-concluir">PATCH /agendamentos/:id/concluir</a></li>
+                <li><a href="#patch-agendamentos-cancelar">PATCH /agendamentos/:id/cancelar</a></li>
+                <li><a href="#get-agendamentos-meus">GET /agendamentos/meus</a></li>
+                <li><a href="#get-agendamentos-proximo">GET /agendamentos/proximo</a></li>
+            </ul>
+
+            <h3>Solicitações</h3>
+            <ul>
+                <li><a href="#post-solicitacoes">POST /solicitacoes</a></li>
+                <li><a href="#get-solicitacoes-pendentes">GET /solicitacoes/pendentes</a></li>
+                <li><a href="#get-solicitacoes-meus">GET /solicitacoes/meus</a></li>
+            </ul>
+
+            <h3>Administradores</h3>
+            <ul>
+                <li><a href="#get-administradores">GET /administradores</a></li>
+                <li><a href="#post-administradores">POST /administradores</a></li>
+            </ul>
+
+            <h3>Autorizadores</h3>
+            <ul>
+                <li><a href="#get-autorizadores">GET /autorizadores</a></li>
+                <li><a href="#post-autorizadores">POST /autorizadores</a></li>
+            </ul>
+
+            <h3>Insumos & Postos</h3>
+            <ul>
+                <li><a href="#get-insumos-buscar">GET /insumos/buscar</a></li>
+                <li><a href="#get-postos">GET /postos</a></li>
+            </ul>
         </aside>
 
         <section class="docs-body">
             
-            <article id="raiz" class="endpoint-card">
-                <div class="endpoint-header get">
-                    <span class="method">GET</span>
-                    <span class="path">/</span>
+            <!-- 1. AUTENTICAÇÃO -->
+            <article id="post-login" class="endpoint-card">
+                <div class="endpoint-header post">
+                    <span class="method">POST</span>
+                    <span class="path">/login</span>
                 </div>
-                <p class="description">Retorna a página de documentação da API.</p>
+                <p class="description">Realiza a autenticação verificando, na ordem, as tabelas pacientes, autorizador e administrador (Login Unificado).</p>
                 
+                <h4>Corpo da Requisição (JSON):</h4>
+                <pre><code>{
+  "email": "usuario@email.com",
+  "senha": "suasenha123"
+}</code></pre>
+
                 <h4>Respostas:</h4>
                 <div class="response-box success">
-                    <strong>200 OK</strong> - Arquivo HTML renderizado com sucesso.
+                    <strong>200 OK</strong> - Retorna o Token JWT e dados do usuário logado.
+                </div>
+                <div class="response-box error">
+                    <strong>400 Bad Request</strong>
+                    <pre><code>{ "erro": "E-mail e senha são obrigatórios" }</code></pre>
+                </div>
+                <div class="response-box error">
+                    <strong>401 Unauthorized</strong>
+                    <pre><code>{ "msg": "E-mail ou senha inválidos" }</code></pre>
                 </div>
             </article>
 
+            <!-- 2. PACIENTES -->
             <article id="get-pacientes" class="endpoint-card">
                 <div class="endpoint-header get">
                     <span class="method">GET</span>
-                    <span class="path">/pacientesall</span>
+                    <span class="path">/pacientes</span>
                 </div>
-                <p class="description">Busca todos os registros de pacientes armazenados no banco de dados.</p>
+                <p class="description">Retorna todos os pacientes cadastrados no sistema.</p>
                 
                 <h4>Respostas:</h4>
                 <div class="response-box success">
-                    <strong>200 OK</strong>
-                    <pre><code>[
-  {
-    "pac_nome": "STRING" (VARCHAR (50)),
-    "pac_email": "STRING" (VARCHAR(60)),
-    "pac_telefone": "STRING" (VARCHAR(11)),
-    "pac_cpf": "STRING"(VARCHAR(11)),
-    "pac_data_nasc": "(AAAA-MM-DD)",
-    "pac_sexo": "CHECK(1)" (M OU F),
-    "pac_endereço": "STRING" (VARCHAR(100)),
-    "pac_raça": "STRING" (VARCHAR(10))
-  }
-]</code></pre>
-                </div>
-
-                <div class="response-box error">
-                    <strong>500 Internal Server Error</strong>
-                    <pre><code>{
-  "message": "STRING",
-  "error": "STRING"
-}</code></pre>
+                    <strong>200 OK</strong> - Array de objetos com todos os dados da tabela pacientes.
                 </div>
             </article>
 
@@ -283,34 +336,253 @@
                     <span class="method">POST</span>
                     <span class="path">/pacientes</span>
                 </div>
-                <p class="description">Cadastra um novo paciente no sistema. A senha enviada é criptografada antes de ser salva.</p>
+                <p class="description">Cria um novo paciente. O sistema gera automaticamente um avatar baseado nas iniciais do nome.</p>
                 
-                <h4>Corpo da Requisição (JSON Format):</h4>
+                <h4>Corpo da Requisição (JSON):</h4>
                 <pre><code>{
-  "pac_nome": "STRING" (VARCHAR (50)),
-    "pac_email": "STRING" (VARCHAR(60)),
-    "pac_telefone": "STRING" (VARCHAR(11)),
-    "pac_cpf": "STRING"(VARCHAR(11)),
-    "pac_data_nasc": "(AAAA-MM-DD)",
-    "pac_sexo": "CHECK(1)" (M OU F),
-    "pac_endereço": "STRING" (VARCHAR(100)),
-    "pac_raça": "STRING" (VARCHAR(10))
+  "nome": "João da Silva",
+  "email": "joao@email.com",
+  "telefone": "(24) 99999-9999",
+  "cpf": "123.456.789-00",
+  "data_nasc": "1990-01-01",
+  "sexo": "Masculino", 
+  "endereco": "Rua A, 123",
+  "raca": "Branca",
+  "senha": "senha123",
+  "cep": "12345-678"
 }</code></pre>
 
                 <h4>Respostas:</h4>
                 <div class="response-box success">
                     <strong>201 Created</strong>
-                    <pre><code>{
-  "message": "STRING"
+                    <pre><code>{ "msg": "Usuário cadastrado com êxito" }</code></pre>
+                </div>
+                <div class="response-box error">
+                    <strong>400 Bad Request</strong> - Erros de validação (Telefone, E-mail, CEP, CPF inválidos ou e-mail já cadastrado).
+                </div>
+            </article>
+
+            <article id="get-pacientes-buscar" class="endpoint-card">
+                <div class="endpoint-header get">
+                    <span class="method">GET</span>
+                    <span class="path">/pacientes/buscar</span>
+                </div>
+                <p class="description">Busca pacientes pelo CPF. Formatação ignorada na busca.</p>
+                
+                <h4>Query Params:</h4>
+                <pre><code>?cpf=12345678900</code></pre>
+
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong> - Array contendo até 10 resultados.
+                    <pre><code>[
+  { 
+    "pac_id": 1, 
+    "pac_nome": "João", 
+    "pac_cpf": "12345678900", 
+    "pac_telefone": "..." 
+  }
+]</code></pre>
+                </div>
+            </article>
+
+            <!-- 3. AGENDAMENTOS -->
+            <article id="get-agendamentos" class="endpoint-card">
+                <div class="endpoint-header get">
+                    <span class="method">GET</span>
+                    <span class="path">/agendamentos</span>
+                </div>
+                <p class="description">Lista agendamentos com filtros avançados. (Visão do Administrador)</p>
+                
+                <h4>Query Params Disponíveis:</h4>
+                <ul>
+                    <li><code>status</code>: 'agendado', 'concluido', 'cancelado', 'todos'</li>
+                    <li><code>busca</code>: Nome, CPF ou Protocolo</li>
+                    <li><code>data_inicio</code> e <code>data_fim</code>: Formato YYYY-MM-DD</li>
+                    <li><code>order</code>: 'proximidade' ou 'asc'</li>
+                </ul>
+
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong> - Array de agendamentos agrupados.
+                </div>
+            </article>
+
+            <article id="post-agendamentos" class="endpoint-card">
+                <div class="endpoint-header post">
+                    <span class="method">POST</span>
+                    <span class="path">/agendamentos</span>
+                </div>
+                <p class="description">Cria um novo agendamento, gera o protocolo e insere os itens de coleta via transação. (Visão do Administrador)</p>
+                
+                <h4>Corpo da Requisição (JSON):</h4>
+                <pre><code>{
+  "paciente": { "pac_id": 1 },
+  "sol_data_de_coleta": "2026-10-15",
+  "posto": { "pos_id": 2 },
+  "itens": [
+    { "ins_nome": "Seringa", "quantidade": 2 },
+    { "ins_nome": "Tubo de ensaio", "quantidade": 5 }
+  ]
+}</code></pre>
+
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>201 Created</strong>
+                    <pre><code>{ 
+  "message": "Agendamento criado com sucesso", 
+  "sol_id": 42, 
+  "sol_protocolo": "AG000042" 
 }</code></pre>
                 </div>
+            </article>
 
+            <article id="patch-agendamentos-concluir" class="endpoint-card">
+                <div class="endpoint-header patch">
+                    <span class="method">PATCH</span>
+                    <span class="path">/agendamentos/:id/concluir</span>
+                </div>
+                <p class="description">Atualiza o status do agendamento para concluído.</p>
+                
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong>
+                    <pre><code>{ "message": "Agendamento concluído" }</code></pre>
+                </div>
                 <div class="response-box error">
-                    <strong>500 Internal Server Error</strong>
-                    <pre><code>{
-  "message": "STRING",
-  "error": "STRING"
+                    <strong>404 Not Found</strong>
+                    <pre><code>{ "message": "Agendamento não encontrado" }</code></pre>
+                </div>
+            </article>
+
+            <article id="patch-agendamentos-cancelar" class="endpoint-card">
+                <div class="endpoint-header patch">
+                    <span class="method">PATCH</span>
+                    <span class="path">/agendamentos/:id/cancelar</span>
+                </div>
+                <p class="description">Atualiza o status do agendamento para cancelado.</p>
+                
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong>
+                    <pre><code>{ "message": "Agendamento cancelado" }</code></pre>
+                </div>
+            </article>
+
+            <article id="get-agendamentos-meus" class="endpoint-card">
+                <div class="endpoint-header get">
+                    <span class="method">GET</span>
+                    <span class="path">/agendamentos/meus</span>
+                </div>
+                <p class="description">Retorna os agendamentos do paciente logado, com paginação. Exige token de Paciente.</p>
+                
+                <h4>Query Params:</h4>
+                <pre><code>?page=1&porPagina=4</code></pre>
+
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong>
+                    <pre><code>{ 
+  "itens": [...], 
+  "paginaAtual": 1, 
+  "totalPaginas": 3 
 }</code></pre>
+                </div>
+                <div class="response-box error">
+                    <strong>403 Forbidden</strong>
+                    <pre><code>{ "error": "Rota exclusiva de paciente" }</code></pre>
+                </div>
+            </article>
+
+            <!-- 4. SOLICITAÇÕES -->
+            <article id="post-solicitacoes" class="endpoint-card">
+                <div class="endpoint-header post">
+                    <span class="method">POST</span>
+                    <span class="path">/solicitacoes</span>
+                </div>
+                <p class="description">Envia uma nova solicitação/prescrição vinculada ao paciente logado.</p>
+                
+                <h4>Corpo da Requisição (JSON):</h4>
+                <pre><code>{
+  "pos_id": 1,
+  "sol_prescricao": "BASE_64_STRING_DA_IMAGEM",
+  "sol_observacao": "Observação opcional",
+  "sol_prescricao_tipo": "Tipo opcional"
+}</code></pre>
+
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>201 Created</strong>
+                    <pre><code>{ "message": "Solicitação enviada com sucesso", "solicitacao": [...] }</code></pre>
+                </div>
+            </article>
+
+            <!-- 5. ADMINISTRADORES -->
+            <article id="post-administradores" class="endpoint-card">
+                <div class="endpoint-header post">
+                    <span class="method">POST</span>
+                    <span class="path">/administradores</span>
+                </div>
+                <p class="description">Cria um novo administrador no sistema.</p>
+                
+                <h4>Corpo da Requisição (JSON):</h4>
+                <pre><code>{
+  "matricula": "ADM123",
+  "nome": "Admin Silva",
+  "email": "admin@email.com",
+  "telefone": "24999999999",
+  "senha": "senhaforte",
+  "cpf": "12345678900",
+  "posto_id": 1
+}</code></pre>
+
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>201 Created</strong>
+                    <pre><code>{ 
+  "message": "Administrador criado com sucesso", 
+  "id": 1, 
+  "tp_universal": false, 
+  "vinculado_a_posto": 1 
+}</code></pre>
+                </div>
+            </article>
+
+            <!-- 7. INSUMOS -->
+            <article id="get-insumos-buscar" class="endpoint-card">
+                <div class="endpoint-header get">
+                    <span class="method">GET</span>
+                    <span class="path">/insumos/buscar</span>
+                </div>
+                <p class="description">Busca insumos por nome ou ID (utilizado no momento de criar agendamentos).</p>
+                
+                <h4>Query Params:</h4>
+                <pre><code>?busca=seringa</code></pre>
+
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong>
+                    <pre><code>[
+  { 
+    "ins_id": 1, 
+    "ins_nome": "Seringa", 
+    "ins_quantidade": 100 
+  }
+]</code></pre>
+                </div>
+            </article>
+
+            <!-- 8. POSTOS -->
+            <article id="get-postos" class="endpoint-card">
+                <div class="endpoint-header get">
+                    <span class="method">GET</span>
+                    <span class="path">/postos</span>
+                </div>
+                <p class="description">Retorna a lista de todos os postos de saúde cadastrados ordenados alfabeticamente.</p>
+                
+                <h4>Respostas:</h4>
+                <div class="response-box success">
+                    <strong>200 OK</strong> - Array com dados de postos.
                 </div>
             </article>
 

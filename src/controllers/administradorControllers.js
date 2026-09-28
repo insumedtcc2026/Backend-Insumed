@@ -47,8 +47,8 @@ async createadministrador(req, res) {
     }
 
     if (posto_id) {
-      const postoExiste = await knex('postos_coleta')
-        .where('id', posto_id)
+      const postoExiste = await knex('postosdesaude')
+        .where('pos_id', posto_id)
         .first();
       if (!postoExiste) {
         return res.status(400).json({ erro: 'Posto inválido' });
