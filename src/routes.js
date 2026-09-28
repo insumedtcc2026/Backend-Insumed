@@ -2,11 +2,10 @@ import express, { Router } from "express";
 import pacientesControllers from './controllers/pacientesControllers.js'; 
 import raizControllers from './controllers/raizControllers.js'; 
 import administradorControllers from "./controllers/administradorControllers.js";
-
 import authorization from './middleware/autorizar.js' 
 import postocoleta from './controllers/postocoleta.js'
 import autorizarAdmin from "./middleware/autorizarAdmin.js";
-import validarAcessoSolicitacao from "./middleware/validarAcessoSolicitacao.js"; // NOVO
+import validarAcessoSolicitacao from "./middleware/autorizarADMrefposto.js"; 
 import agendamentosControllers from "./controllers/agendamentosControllers.js";
 import insumosControllers from "./controllers/insumosControllers.js";
 import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
