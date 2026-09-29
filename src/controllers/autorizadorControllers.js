@@ -20,7 +20,9 @@ export default {
 
   async buscarPrescricoesAprovadas(req, res) {
     try {
-        const admin = req.session;
+
+      console.log("========== BUSCANDO PRESCRIÇÕES APROVADAS =========="); console.log("Sessão:", req.session);
+        const autorizador = req.session;
 
         const query = knex("solicitacao as sol")
             .innerJoin(
@@ -62,9 +64,6 @@ export default {
             
             ]);
 
-        if (!admin.tp_universal) {
-            query.andWhere("sol.pos_id", admin.posto_id);
-        }
       
  const prescricoes = await query;
 
