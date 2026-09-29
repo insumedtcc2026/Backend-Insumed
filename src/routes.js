@@ -103,8 +103,7 @@ routes.get(
 
 routes.patch(
   '/solicitacao/:id',
-  authorization, autorizarAdmin, validarAcessoSolicitacao,
-  solicitacaoControllers.alterarStatus
+  authorization, autorizarAdmin, validarAcessoSolicitacao,solicitacaoControllers.alterarStatus
 );
 
 export default routes;

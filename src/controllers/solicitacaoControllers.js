@@ -207,7 +207,9 @@ async detalhesPrescricaoPaciente(req, res) {
 
             const { id } = req.params;
 
-            const { sol_status } = req.body;
+            const { sol_status, sol_data_vencimento } = req.body;
+
+            
 
 
             if (!sol_status) {
@@ -220,13 +222,14 @@ async detalhesPrescricaoPaciente(req, res) {
             await knex('solicitacao')
                 .where('sol_id', id)
                 .update({
-                    sol_status: sol_status
+                    sol_status: sol_status,
+                    sol_data_vencimento: sol_data_vencimento
                 });
 
 
             return res.status(200).json({
                 message:
-                    'Status atualizado com sucesso'
+                    'Status atualizado e data de vencimento atualizados com sucesso'
             });
 
 
@@ -310,6 +313,7 @@ async buscarHistoricoPrescricoes(req, res) {
                 "sol.pos_id",
                 "sol.sol_status",
                 "sol.sol_data_solicitacao",
+                "sol.sol_data_vencimento",
 
                 "sol.sol_motivo_reenvio",
                 "sol.sol_observacao",

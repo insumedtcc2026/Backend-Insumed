@@ -191,13 +191,18 @@ async loginGeral(req, res) {
                     token,
 
                     usuario: {
-                        id: paciente.pac_id,
-                        nome: paciente.pac_nome,
-                        email: paciente.pac_email,
-                        telefone: paciente.pac_telefone,
-                        cpf: paciente.pac_cpf,
-                        tipo: "PACIENTE"
-                    },
+                pac_id: paciente.pac_id,
+                pac_nome: paciente.pac_nome,
+                pac_email: paciente.pac_email,
+                pac_telefone: paciente.pac_telefone,
+                pac_cpf: paciente.pac_cpf,
+                pac_cep: paciente.pac_cep,
+                pac_data_nasc: paciente.pac_data_nasc,
+                pac_endereco: paciente.pac_endereco,
+                pac_sexo: paciente.pac_sexo,
+                pac_raca: paciente.pac_raca,
+                tipo: "PACIENTE"
+            },
 
                     tipo: "PACIENTE"
                 });
