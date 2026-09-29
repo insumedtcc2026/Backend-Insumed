@@ -106,8 +106,18 @@ async loginGeral(req, res) {
                 erro: "Chave de autenticação não configurada"
             });
         }
+const admin = await knex("administrador")
+    .where("adm_email", email)
+    .first();
 
-       
+const autorizador = await knex("autorizador")
+    .where("aut_email", email)
+    .first();
+
+const paciente = await knex("pacientes")
+    .where("pac_email", email)
+    .first();
+
 console.log("EMAIL RECEBIDO:", email);
 
 console.log(
@@ -125,7 +135,6 @@ console.log(
     paciente ? paciente.pac_email : "não encontrado"
 );
 
-
     
 
 
@@ -135,9 +144,6 @@ console.log(
         // 1. TENTA LOGIN COMO ADMINISTRADOR
        
 
-        const admin = await knex("administrador")
-            .where("adm_email", email)
-            .first();
 
         if (admin) {
             const senhaValida = await bcrypt.compare(
@@ -184,9 +190,7 @@ console.log(
 
 
         
-        const autorizador = await knex("autorizador")
-            .where("aut_email", email)
-            .first();
+        
 
         if (autorizador) {
             const senhaValida = await bcrypt.compare(
@@ -232,10 +236,6 @@ console.log(
         // ==========================================
         // 2. TENTA LOGIN COMO PACIENTE
         // ==========================================
-
-        const paciente = await knex("pacientes")
-            .where("pac_email", email)
-            .first();
 
         if (paciente) {
             const senhaValida = await bcrypt.compare(
