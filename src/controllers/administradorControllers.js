@@ -107,9 +107,9 @@ async loginGeral(req, res) {
             });
         }
 
-        // ==========================================
+       
         // 1. TENTA LOGIN COMO ADMINISTRADOR
-        // ==========================================
+       
 
         const admin = await knex("administrador")
             .where("adm_email", email)
@@ -209,9 +209,9 @@ async loginGeral(req, res) {
             }
         }
 
-        // ==========================================
+       
         // NENHUM USUÁRIO ENCONTRADO
-        // ==========================================
+        
 
         return res.status(401).json({
             msg: "E-mail ou senha inválidos"

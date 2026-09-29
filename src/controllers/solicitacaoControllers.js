@@ -256,6 +256,7 @@ async buscarSolicitacaoPorId(req, res) {
         "sol.sol_data_solicitacao",
         "sol.sol_status",
         "sol.sol_observacao",
+        "sol_data_vencimento",
 
         "pac.pac_nome",
         "pac.pac_cpf",
