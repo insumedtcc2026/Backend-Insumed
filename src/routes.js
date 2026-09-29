@@ -10,6 +10,7 @@ import agendamentosControllers from "./controllers/agendamentosControllers.js";
 import insumosControllers from "./controllers/insumosControllers.js";
 import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
 import autorizadorControllers from "./controllers/autorizadorControllers.js";
+import autorizarAut from "./middleware/autorizarAut.js";
 
 
 const routes = express.Router();
@@ -43,9 +44,10 @@ routes.get('/administradorall', administradorControllers.administradorall);
 
 routes.post('/administrador', administradorControllers.createadministrador);
 
-//rotas prescritor
-routes.get('/autorizadorall', autorizadorControllers.autorizadorrall);
-routes.post('/autorizador', autorizadorControllers.createautorizador);
+//rotas autorizador
+routes.get('/autorizadorall',authorization,autorizarAut, autorizadorControllers.autorizadorrall);
+routes.post('/autorizador', authorization, autorizarAut, autorizadorControllers.createautorizador);
+routes.get('/prescricao/aprovadas',authorization,autorizarAut, autorizadorControllers.buscarPrescricoesAprovadas);
 
 
 //agendamento

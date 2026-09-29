@@ -356,6 +356,8 @@ async buscarHistoricoPrescricoes(req, res) {
 
 },
 
+
+
 async pedirReenvio(req, res) {
   try {
 
@@ -416,6 +418,8 @@ async pedirReenvio(req, res) {
     });
   }
 
+     
 
+  
 },
 };

@@ -108,6 +108,30 @@ async loginGeral(req, res) {
         }
 
        
+console.log("EMAIL RECEBIDO:", email);
+
+console.log(
+    "ADMIN:",
+    admin ? admin.adm_email : "não encontrado"
+);
+
+console.log(
+    "AUTORIZADOR:",
+    autorizador ? autorizador.aut_email : "não encontrado"
+);
+
+console.log(
+    "PACIENTE:",
+    paciente ? paciente.pac_email : "não encontrado"
+);
+
+
+    
+
+
+
+
+       
         // 1. TENTA LOGIN COMO ADMINISTRADOR
        
 
@@ -153,6 +177,53 @@ async loginGeral(req, res) {
     tp_universal: admin.tp_universal,
 
     tipo: "ADMIN"
+}
+                });
+            }
+        }
+
+
+        
+        const autorizador = await knex("autorizador")
+            .where("aut_email", email)
+            .first();
+
+        if (autorizador) {
+            const senhaValida = await bcrypt.compare(
+                senha,
+                autorizador.aut_senha
+            );
+
+            if (senhaValida) {
+
+                const token = jsonwebtoken.sign(
+                    {
+                        id: autorizador.aut_id,
+                        email: autorizador.aut_email,
+                      
+                        tipo: "AUTORIZADOR"
+                    },
+                    secret,
+                    {
+                        expiresIn: "7d"
+                    }
+                );
+
+                return res.status(200).json({
+                    msg: "Autenticação realizada com sucesso",
+                    token,
+
+                    usuario: {
+    aut_id: autorizador.aut_id,
+    aut_nome: autorizador.aut_nome,
+    aut_cpf: autorizador.aut_cpf,
+    aut_email: autorizador.aut_email,
+    aut_tel: autorizador.aut_tel,
+
+    // informações necessárias para autorização
+    
+
+    tipo: "AUTORIZADOR"
 }
                 });
             }
@@ -224,8 +295,9 @@ async loginGeral(req, res) {
         return res.status(500).json({
             erro: error.message
         });
-    }
-},
+
+      
+      }},
 
    async login(req, res) {
     try {

@@ -17,6 +17,69 @@ export default {
     }
   },
 
+
+  async buscarPrescricoesAprovadas(req, res) {
+    try {
+        const admin = req.session;
+
+        const query = knex("solicitacao as sol")
+            .innerJoin(
+                "pacientes as pac",
+                "pac.pac_id",
+                "sol.pac_id"
+            )
+            .leftJoin(
+                "insumo as ins",
+                "ins.ins_id",
+                "sol.ins_id"
+            )
+            .leftJoin(
+                "postosdesaude as pos",
+                "pos.pos_id",
+                "sol.pos_id"
+            )
+            .select(
+                "sol.sol_id",
+                "sol.pac_id",
+                "sol.pos_id",
+                "sol.sol_status",
+                "sol.sol_data_solicitacao",
+                "sol.sol_data_vencimento",
+
+                "sol.sol_motivo_reenvio",
+                "sol.sol_observacao",
+                "sol.sol_prescricao_tipo",
+
+                "pac.pac_nome",
+                "pac.pac_cpf",
+                "pac.pac_avatar",
+
+                "ins.ins_nome",
+                "pos.pos_nome"
+            )
+            .whereIn("sol.sol_status", [
+                "Aprovado",
+            
+            ]);
+
+        if (!admin.tp_universal) {
+            query.andWhere("sol.pos_id", admin.posto_id);
+        }
+      
+ const prescricoes = await query;
+
+        return res.status(200).json(prescricoes);
+
+    } catch (error) {
+        console.error("Erro ao buscar prescrições aprovadas:", error);
+
+        return res.status(500).json({
+            error: "Erro ao buscar prescrições aprovadas."
+        });
+    }
+},
+  
+
   // cria um novo administrador
   async createautorizador(req, res) {
     try {
