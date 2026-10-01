@@ -234,14 +234,11 @@ if (!cpf || !regexCpf.test(cpf)) {
     }
   },
 
-  async  atualizarPerfil(req, res) {
+  async atualizarPerfil(req, res) {
     try {
         const pacienteId = req.session.id;
 
-        const {
-            campo,
-            valor
-        } = req.body;
+        const { campo, valor } = req.body;
 
         const camposPermitidos = {
             nome: "pac_nome",
@@ -262,22 +259,33 @@ if (!cpf || !regexCpf.test(cpf)) {
             });
         }
 
-        if (valor === undefined || valor === null || valor === "") {
+        if (
+            valor === undefined ||
+            valor === null ||
+            valor.toString().trim() === ""
+        ) {
             return res.status(400).json({
                 erro: "O novo valor é obrigatório."
             });
         }
 
+        // 🔹 ALTERA O CAMPO NO BANCO
+        await knex("pacientes")
+            .where("pac_id", pacienteId)
+            .update({
+                [coluna]: valor
+            });
+
+        // 🔹 BUSCA OS DADOS ATUALIZADOS
         const pacienteAtualizado = await knex("pacientes")
-    .where("pac_id", pacienteId)
-    .first();
+            .where("pac_id", pacienteId)
+            .first();
 
-         return res.status(200).json({
-    mensagem: "Perfil atualizado com sucesso",
-    usuario: pacienteAtualizado
-      });
+        return res.status(200).json({
+            mensagem: "Perfil atualizado com sucesso",
+            usuario: pacienteAtualizado
+        });
 
-       
     } catch (error) {
         console.error("Erro ao atualizar perfil:", error);
 
@@ -285,7 +293,7 @@ if (!cpf || !regexCpf.test(cpf)) {
             erro: "Erro ao atualizar informação do paciente."
         });
     }
-  },
+},
   
 
   async buscarPorCpf (req, res) {
