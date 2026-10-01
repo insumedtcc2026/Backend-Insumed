@@ -268,16 +268,16 @@ if (!cpf || !regexCpf.test(cpf)) {
             });
         }
 
-        await knex("pacientes")
-            .where("pac_id", pacienteId)
-            .update({
-                [coluna]: valor
-            });
+        const pacienteAtualizado = await knex("pacientes")
+    .where("pac_id", pacienteId)
+    .first();
 
-        return res.status(200).json({
-            mensagem: "Informação atualizada com sucesso."
-        });
+         return res.status(200).json({
+    mensagem: "Perfil atualizado com sucesso",
+    usuario: pacienteAtualizado
+      });
 
+       
     } catch (error) {
         console.error("Erro ao atualizar perfil:", error);
 
