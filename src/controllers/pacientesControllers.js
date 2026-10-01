@@ -234,6 +234,60 @@ if (!cpf || !regexCpf.test(cpf)) {
     }
   },
 
+  async  atualizarPerfil(req, res) {
+    try {
+        const pacienteId = req.session.id;
+
+        const {
+            campo,
+            valor
+        } = req.body;
+
+        const camposPermitidos = {
+            nome: "pac_nome",
+            cpf: "pac_cpf",
+            cep: "pac_cep",
+            data_nascimento: "pac_data_nasc",
+            email: "pac_email",
+            endereco: "pac_endereco",
+            telefone: "pac_telefone",
+            raca: "pac_raca"
+        };
+
+        const coluna = camposPermitidos[campo];
+
+        if (!coluna) {
+            return res.status(400).json({
+                erro: "Campo não permitido para alteração."
+            });
+        }
+
+        if (valor === undefined || valor === null || valor === "") {
+            return res.status(400).json({
+                erro: "O novo valor é obrigatório."
+            });
+        }
+
+        await knex("pacientes")
+            .where("pac_id", pacienteId)
+            .update({
+                [coluna]: valor
+            });
+
+        return res.status(200).json({
+            mensagem: "Informação atualizada com sucesso."
+        });
+
+    } catch (error) {
+        console.error("Erro ao atualizar perfil:", error);
+
+        return res.status(500).json({
+            erro: "Erro ao atualizar informação do paciente."
+        });
+    }
+  },
+  
+
   async buscarPorCpf (req, res) {
 try {
 const { cpf } = req.query;
@@ -246,5 +300,8 @@ return res.status(200).send(pacientes);
 } catch (error) {
 return res.status(500).send({ message: 'Erro ao buscar pacientes', error: error.message });
 }
+
+
+
 }
 };

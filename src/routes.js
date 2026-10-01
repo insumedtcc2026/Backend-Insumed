@@ -24,6 +24,9 @@ routes.get('/pacientesall', pacientesControllers.pacientesall);
 routes.post('/pacientes', pacientesControllers.createpaciente);
 
 routes.get('/pacientes', authorization, autorizarAdmin, pacientesControllers.buscarPorCpf);
+routes.put(
+    "/pacientes/perfil", authorization, pacientesControllers.atualizarPerfil
+);
 
 routes.post('/login',administradorControllers.loginGeral)
 
