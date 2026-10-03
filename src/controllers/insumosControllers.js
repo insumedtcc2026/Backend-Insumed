@@ -50,7 +50,7 @@ async criarInsumo(req, res) {
       return res.status(400).send({ message: 'A quantidade deve ser um número maior que zero' });
     }
 
-    const posId = req.session.posto_id ?? null;
+    const posId = req.session.pos_id ?? null;
 
     let consulta = knex('insumo')
       .whereRaw('LOWER(TRIM(ins_nome)) = LOWER(?)', [nomeLimpo])
