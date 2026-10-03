@@ -64,8 +64,9 @@ routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, agenda
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);
 
-
+//rotas insumos
 routes.get('/insumos', authorization, autorizarAdmin, insumosControllers.buscar)
+routes.post('/insumos', authorization, autorizarAdmin, insumosControllers.criarInsumo);
 
 
 //rotas solicitaçao
