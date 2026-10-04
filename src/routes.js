@@ -65,6 +65,7 @@ routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMe
 routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);
 
 //rotas insumos
+routes.get('/insumos/listar', authorization, autorizarAdmin, insumosControllers.listar);
 routes.get('/insumos', authorization, autorizarAdmin, insumosControllers.buscar)
 routes.post('/insumos', authorization, autorizarAdmin, insumosControllers.criarInsumo);
 
