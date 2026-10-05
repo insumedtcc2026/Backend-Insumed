@@ -68,6 +68,58 @@ export default {
     }
   },
 
+  async movimentar(req, res) {
+  try {
+    const {id} = req.params;
+    const { tipo} = req.body;
+    const quantidade = Number(req.body.quantidade);
+    const admin = req.session;
+    const universal = Boolean(admin.tp_universal);
+
+    if (!Number.isInteger(quantidade) || quantidade <= 0) {
+      return res.status(400).send({ message: 'Informe uma quantidade inteira maior que zero' });
+    }
+    if (tipo !== 'entrada' && tipo !== 'saida') {
+      return res.status(400).send({ message: 'O tipo deve ser "entrada" ou "saida"' });
+    }
+
+    let consulta = knex('insumo').where('ins_id', id);
+
+    if (!universal) {
+      consulta = admin.posto_id
+        ? consulta.where('pos_id', admin.posto_id)
+        : consulta.whereNull('pos_id');
+    }
+
+    const insumo = await consulta.first();
+
+    if (!insumo) {
+      return res.status(404).send({ message: 'Insumo não encontrado' });
+    }
+
+    const atual = Number(insumo.ins_quantidade);
+
+    if (tipo === 'saida' && quantidade > atual) {
+      return res.status(400).send({ message: `Estoque insuficiente. Disponível: ${atual}` });
+    }
+
+    const novaQuantidade = tipo === 'entrada' ? atual + quantidade : atual - quantidade;
+
+    await knex('insumo')
+      .where('ins_id', id)
+      .update({ ins_quantidade: novaQuantidade });
+
+    return res.status(200).send({
+      message: tipo === 'entrada' ? 'Entrada registrada com sucesso' : 'Saída registrada com sucesso',
+      ins_id: insumo.ins_id,
+      ins_quantidade: novaQuantidade,
+    });
+
+  } catch (error) {
+    return res.status(500).send({ message: 'Erro ao movimentar insumo', error: error.message });
+  }
+},
+
   async criarInsumo(req, res) {
     try {
       const { nome, quantidade, marca } = req.body;
@@ -138,4 +190,6 @@ export default {
         .send({ message: "Erro ao criar insumo", error: error.message });
     }
   },
+
+
 };
