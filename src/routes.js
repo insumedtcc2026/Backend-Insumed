@@ -52,6 +52,27 @@ routes.get('/autorizadorall',authorization,autorizarAut, autorizadorControllers.
 routes.post('/autorizador', authorization, autorizarAut, autorizadorControllers.createautorizador);
 routes.get('/prescricao/aprovadas',authorization,autorizarAut, autorizadorControllers.buscarPrescricoesAprovadas);
 
+routes.get(
+  '/autorizador/solicitacao/:id',
+  authorization,
+  autorizarAut,
+  autorizadorControllers.buscarSolicitacaoAprovada
+);
+
+routes.get(
+  '/autorizador/solicitacao/:id/prescricao',
+  authorization,
+  autorizarAut,
+  autorizadorControllers.buscarPrescricaoAprovada
+);
+
+routes.patch(
+  '/autorizador/solicitacao/:id',
+  authorization,
+  autorizarAut,
+  autorizadorControllers.alterarStatusAutorizador
+);
+
 
 //agendamento
 routes.get('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.listar);
