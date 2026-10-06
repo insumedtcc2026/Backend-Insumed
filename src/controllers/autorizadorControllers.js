@@ -101,11 +101,8 @@ export default {
         );
 
 
-      console.log(
-        "Prescrições encontradas:",
-        prescricoes
-      );
-
+     console.log("QUANTIDADE ENCONTRADA:", prescricoes.length);
+    console.log("DADOS:", prescricoes);
 
       return res.status(200).json(
         prescricoes
