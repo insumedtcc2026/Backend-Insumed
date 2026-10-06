@@ -405,7 +405,8 @@ async buscarHistoricoPrescricoes(req, res) {
             )
             .whereIn("sol.sol_status", [
                 "Aprovado",
-                "Reenvio"
+                "Reenvio",
+                "Enviado"
             ]);
 
         if (!admin.tp_universal) {
