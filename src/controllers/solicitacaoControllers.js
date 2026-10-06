@@ -59,39 +59,23 @@ export default {
 },
 
 
-   async buscarprescricoespendetes(req, res) {
+async buscarprescricoespendetes(req, res) {
     try {
-        const admin = req.session;
 
-        const query = knex("solicitacao as sol")
-            .innerJoin(
-                "pacientes as pac",
-                "pac.pac_id",
-                "sol.pac_id"
-            )
+        const solicitacoes = await knex("solicitacao")
             .select(
-                "sol.sol_id",
-                "sol.pac_id",
-                "sol.pos_id",
-                "sol.sol_status",
-                "sol.sol_data_solicitacao",
-                "pac.pac_nome",
-                "pac.pac_cpf",
-                "pac.pac_avatar"
+                "sol_id",
+                "pac_id",
+                "pos_id",
+                "sol_status",
+                "sol_data_solicitacao"
             )
-            .wherethis.where("sol.sol_status", "Pendente")
-        .orWhere("sol.sol_status", "Autorizado")
-            .orderBy("sol.sol_data_solicitacao", "asc");
+            .orderBy("sol_data_solicitacao", "asc");
 
-        if (!admin.tp_universal) {
-            query.andWhere("sol.pos_id", admin.posto_id);
-        }
-
-        const solicitacoes = await query;
-        
-console.log("STATUS PROCURADOS: Pendente e Autorizado");
-console.log("SOLICITAÇÕES ENCONTRADAS:", solicitacoes);
-        console.log("Solicitações encontradas:", solicitacoes);
+        console.log(
+            "SOLICITAÇÕES:",
+            solicitacoes
+        );
 
         return res.status(200).json(solicitacoes);
 
