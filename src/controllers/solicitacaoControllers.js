@@ -81,7 +81,8 @@ async buscarprescricoespendetes(req, res) {
             )
             .whereIn("sol.sol_status", [
                 "Pendente",
-                "Autorizado"
+                "Autorizado",
+                "Enviado"
             ])
             .orderBy(
                 "sol.sol_data_solicitacao",
@@ -226,9 +227,7 @@ async detalhesPrescricaoPaciente(req, res) {
   }
 },
 async alterarStatus(req, res) {
-
     try {
-
         const { id } = req.params;
 
         const {
@@ -238,85 +237,70 @@ async alterarStatus(req, res) {
             sol_insumo_quant
         } = req.body;
 
-
-        // =========================================
-        // VALIDAR STATUS
-        // =========================================
-
         if (!sol_status) {
             return res.status(400).json({
-                error: 'Status não informado'
+                error: "Status não informado"
             });
         }
 
-
-        // =========================================
-        // SE FOR APROVAR, VALIDAR INSUMO E QUANTIDADE
-        // =========================================
-
-        if (sol_status === "Aprovado") {
+        // Quando o administrador enviar para o autorizador,
+        // é obrigatório informar o insumo e a quantidade.
+        if (sol_status === "Enviado") {
 
             if (!ins_id) {
                 return res.status(400).json({
-                    error: 'Insumo não informado'
+                    error: "Insumo não informado"
                 });
             }
 
             if (!sol_insumo_quant || Number(sol_insumo_quant) <= 0) {
                 return res.status(400).json({
-                    error: 'Quantidade de insumo inválida'
+                    error: "Quantidade de insumo inválida"
                 });
             }
-
         }
 
+        const dadosAtualizacao = {
+            sol_status,
+            sol_data_vencimento
+        };
 
-        // =========================================
-        // ATUALIZAR SOLICITAÇÃO
-        // =========================================
+        // Só altera insumo e quantidade quando estiver enviando
+        // para o autorizador.
+        if (sol_status === "Enviado") {
+            dadosAtualizacao.ins_id = Number(ins_id);
+            dadosAtualizacao.sol_insumo_quant = Number(sol_insumo_quant);
+        }
 
-        await knex('solicitacao')
-            .where('sol_id', id)
-            .update({
-                sol_status: sol_status,
-                sol_data_vencimento: sol_data_vencimento,
-                ins_id: ins_id || null,
-                sol_insumo_quant:
-                    sol_insumo_quant
-                        ? Number(sol_insumo_quant)
-                        : 0
+        const quantidadeAtualizada = await knex("solicitacao")
+            .where("sol_id", id)
+            .update(dadosAtualizacao);
+
+        if (!quantidadeAtualizada) {
+            return res.status(404).json({
+                error: "Solicitação não encontrada"
             });
-
+        }
 
         return res.status(200).json({
-
-            message:
-                'Solicitação atualizada com sucesso',
-
-            ins_id:
-                ins_id || null,
-
-            quantidade:
-                sol_insumo_quant
-                    ? Number(sol_insumo_quant)
-                    : 0
-
+            message: "Solicitação atualizada com sucesso",
+            sol_status,
+            ins_id: ins_id || null,
+            quantidade: sol_insumo_quant
+                ? Number(sol_insumo_quant)
+                : null
         });
 
-
     } catch (error) {
-
         console.error(
-            'Erro ao alterar solicitação:',
+            "Erro ao alterar solicitação:",
             error
         );
 
         return res.status(500).json({
             error: error.message
         });
-
     }
-
 },
 async buscarSolicitacaoPorId(req, res) {
   try {
