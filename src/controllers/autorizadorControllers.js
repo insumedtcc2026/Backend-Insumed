@@ -40,14 +40,8 @@ export default {
 
     try {
 
-      console.log(
-        "========== BUSCANDO PRESCRIÇÕES APROVADAS =========="
-      );
-
-      console.log(
-        "Sessão:",
-        req.session
-      );
+         console.log("========== PRESCRIÇÕES APROVADAS ==========");
+    console.log("Sessão:", req.session);
 
       const prescricoes = await knex("solicitacao as sol")
 
