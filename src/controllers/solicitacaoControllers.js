@@ -81,12 +81,18 @@ async buscarprescricoespendetes(req, res) {
 
     } catch (error) {
 
-        console.error("ERRO NO /PENDENTES:", error);
+     
+    console.error("=================================");
+    console.error("ERRO NO /PENDENTES");
+    console.error("MESSAGE:", error.message);
+    console.error("STACK:", error.stack);
+    console.error("=================================");
 
-        return res.status(500).json({
-            error: error.message
-        });
-    }
+    return res.status(500).json({
+        error: error.message,
+        message: error.message
+    });
+  }
 },
 
 async buscarPrescricao(req, res) {
