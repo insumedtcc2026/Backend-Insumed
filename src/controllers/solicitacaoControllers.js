@@ -87,7 +87,9 @@ export default {
         }
 
         const solicitacoes = await query;
-
+        
+console.log("STATUS PROCURADOS: Pendente e Autorizado");
+console.log("SOLICITAÇÕES ENCONTRADAS:", solicitacoes);
         console.log("Solicitações encontradas:", solicitacoes);
 
         return res.status(200).json(solicitacoes);
