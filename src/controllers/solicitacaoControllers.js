@@ -62,6 +62,9 @@ export default {
 async buscarprescricoespendetes(req, res) {
     try {
 
+        console.log("========== /PENDENTES ==========");
+        console.log("SESSION:", req.session);
+
         const solicitacoes = await knex("solicitacao")
             .select(
                 "sol_id",
@@ -81,20 +84,15 @@ async buscarprescricoespendetes(req, res) {
 
     } catch (error) {
 
-     
-    console.error("=================================");
-    console.error("ERRO NO /PENDENTES");
-    console.error("MESSAGE:", error.message);
-    console.error("STACK:", error.stack);
-    console.error("=================================");
+        console.error("========== ERRO /PENDENTES ==========");
+        console.error("MESSAGE:", error.message);
+        console.error("STACK:", error.stack);
 
-    return res.status(500).json({
-        error: error.message,
-        message: error.message
-    });
-  }
+        return res.status(500).json({
+            error: error.message
+        });
+    }
 },
-
 async buscarPrescricao(req, res) {
     try {
         const { id } = req.params;
