@@ -79,7 +79,8 @@ export default {
                 "pac.pac_cpf",
                 "pac.pac_avatar"
             )
-            .where("sol.sol_status", "Pendente", "Autorizado")
+            .wherethis.where("sol.sol_status", "Pendente")
+        .orWhere("sol.sol_status", "Autorizado")
             .orderBy("sol.sol_data_solicitacao", "asc");
 
         if (!admin.tp_universal) {
