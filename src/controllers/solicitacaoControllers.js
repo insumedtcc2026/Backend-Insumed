@@ -58,41 +58,75 @@ export default {
     }
 },
 
-
 async buscarprescricoespendetes(req, res) {
     try {
 
-        console.log("========== /PENDENTES ==========");
-        console.log("SESSION:", req.session);
+        const admin = req.session;
 
-        const solicitacoes = await knex("solicitacao")
-            .select(
-                "sol_id",
-                "pac_id",
-                "pos_id",
-                "sol_status",
-                "sol_data_solicitacao"
+        const query = knex("solicitacao as sol")
+            .innerJoin(
+                "pacientes as pac",
+                "pac.pac_id",
+                "sol.pac_id"
             )
-            .orderBy("sol_data_solicitacao", "asc");
+            .select(
+                "sol.sol_id",
+                "sol.pac_id",
+                "sol.pos_id",
+                "sol.sol_status",
+                "sol.sol_data_solicitacao",
+                "pac.pac_nome",
+                "pac.pac_cpf",
+                "pac.pac_avatar"
+            )
+            .whereIn("sol.sol_status", [
+                "Pendente",
+                "Autorizado"
+            ])
+            .orderBy(
+                "sol.sol_data_solicitacao",
+                "asc"
+            );
+
+
+        // ADMINISTRADOR LIMITADO AO POSTO
+        if (!admin.tp_universal) {
+
+            query.andWhere(
+                "sol.pos_id",
+                admin.posto_id
+            );
+
+        }
+
+
+        const solicitacoes = await query;
 
         console.log(
-            "SOLICITAÇÕES:",
+            "SOLICITAÇÕES DO ADMIN:",
             solicitacoes
         );
 
-        return res.status(200).json(solicitacoes);
+
+        return res.status(200).json(
+            solicitacoes
+        );
+
 
     } catch (error) {
 
-        console.error("========== ERRO /PENDENTES ==========");
-        console.error("MESSAGE:", error.message);
-        console.error("STACK:", error.stack);
+        console.error(
+            "ERRO NO /PENDENTES:",
+            error
+        );
 
         return res.status(500).json({
             error: error.message
         });
+
     }
 },
+
 async buscarPrescricao(req, res) {
     try {
         const { id } = req.params;
