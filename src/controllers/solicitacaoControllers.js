@@ -200,48 +200,99 @@ async detalhesPrescricaoPaciente(req, res) {
     return res.status(500).json({ error: error.message });
   }
 },
+async alterarStatus(req, res) {
 
-    async alterarStatus(req, res) {
+    try {
 
-        try {
+        const { id } = req.params;
 
-            const { id } = req.params;
+        const {
+            sol_status,
+            sol_data_vencimento,
+            ins_id,
+            sol_insumo_quant
+        } = req.body;
 
-            const { sol_status, sol_data_vencimento } = req.body;
 
-            
+        // =========================================
+        // VALIDAR STATUS
+        // =========================================
+
+        if (!sol_status) {
+            return res.status(400).json({
+                error: 'Status não informado'
+            });
+        }
 
 
-            if (!sol_status) {
+        // =========================================
+        // SE FOR APROVAR, VALIDAR INSUMO E QUANTIDADE
+        // =========================================
+
+        if (sol_status === "Aprovado") {
+
+            if (!ins_id) {
                 return res.status(400).json({
-                    error: 'Status não informado'
+                    error: 'Insumo não informado'
                 });
             }
 
-
-            await knex('solicitacao')
-                .where('sol_id', id)
-                .update({
-                    sol_status: sol_status,
-                    sol_data_vencimento: sol_data_vencimento
+            if (!sol_insumo_quant || Number(sol_insumo_quant) <= 0) {
+                return res.status(400).json({
+                    error: 'Quantidade de insumo inválida'
                 });
+            }
 
-
-            return res.status(200).json({
-                message:
-                    'Status atualizado e data de vencimento atualizados com sucesso'
-            });
-
-
-        } catch (error) {
-
-            console.error(error);
-
-            return res.status(500).json({
-                error: error.message
-            });
         }
-    },
+
+
+        // =========================================
+        // ATUALIZAR SOLICITAÇÃO
+        // =========================================
+
+        await knex('solicitacao')
+            .where('sol_id', id)
+            .update({
+                sol_status: sol_status,
+                sol_data_vencimento: sol_data_vencimento,
+                ins_id: ins_id || null,
+                sol_insumo_quant:
+                    sol_insumo_quant
+                        ? Number(sol_insumo_quant)
+                        : 0
+            });
+
+
+        return res.status(200).json({
+
+            message:
+                'Solicitação atualizada com sucesso',
+
+            ins_id:
+                ins_id || null,
+
+            quantidade:
+                sol_insumo_quant
+                    ? Number(sol_insumo_quant)
+                    : 0
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            'Erro ao alterar solicitação:',
+            error
+        );
+
+        return res.status(500).json({
+            error: error.message
+        });
+
+    }
+
+},
 async buscarSolicitacaoPorId(req, res) {
   try {
     const { id } = req.params;
