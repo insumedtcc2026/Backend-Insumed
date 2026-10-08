@@ -180,9 +180,10 @@ export default {
         // O AUTORIZADOR só pode abrir
         // prescrições que foram aprovadas.
         .whereIn(
-          "sol.sol_status",
+          "sol.sol_status",[
           "Aprovado",
           "Enviado"
+          ]
         )
 
         .first();
@@ -244,8 +245,10 @@ export default {
 
         .whereIn(
           "sol_status",
+          [
           "Aprovado",
           "Enviado"
+          ]
         )
 
         .first();
