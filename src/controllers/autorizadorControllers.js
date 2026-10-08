@@ -179,7 +179,7 @@ export default {
 
         // O AUTORIZADOR só pode abrir
         // prescrições que foram aprovadas.
-        .where(
+        .whereIn(
           "sol.sol_status",
           "Aprovado",
           "Enviado"
@@ -242,7 +242,7 @@ export default {
           id
         )
 
-        .where(
+        .whereIn(
           "sol_status",
           "Aprovado",
           "Enviado"
