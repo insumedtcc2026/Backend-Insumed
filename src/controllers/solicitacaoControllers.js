@@ -306,29 +306,31 @@ async buscarSolicitacaoPorId(req, res) {
   try {
     const { id } = req.params;
 
+    console.log("ID recebido:", id);
+
     const solicitacao = await knex("solicitacao as sol")
-      .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
-      .innerJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
-      .leftJoin("insumos as ins", "ins.ins_id", "sol.ins_id")
+      .leftJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
+      .leftJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
+      .leftJoin("insumo as ins", "ins.ins_id", "sol.ins_id")
       .select(
         "sol.sol_id",
         "sol.pac_id",
         "sol.pos_id",
+        "sol.ins_id",
         "sol.sol_insumo_quant",
         "sol.sol_data_solicitacao",
         "sol.sol_status",
         "sol.sol_observacao",
-        "sol_data_vencimento",
-
+        "sol.sol_data_vencimento",
         "pac.pac_nome",
         "pac.pac_cpf",
-
         "pos.pos_nome",
-
-         "ins.ins_nome"
+        "ins.ins_nome"
       )
       .where("sol.sol_id", id)
       .first();
+
+    console.log("RESULTADO:", solicitacao);
 
     if (!solicitacao) {
       return res.status(404).json({
@@ -339,14 +341,11 @@ async buscarSolicitacaoPorId(req, res) {
     return res.status(200).json(solicitacao);
 
   } catch (error) {
-
-    console.error(
-      "Erro ao buscar solicitação:",
-      error
-    );
+    console.error("ERRO COMPLETO:", error);
 
     return res.status(500).json({
-      error: error.message
+      error: error.message,
+      stack: error.stack
     });
   }
 },
