@@ -309,10 +309,12 @@ async buscarSolicitacaoPorId(req, res) {
     const solicitacao = await knex("solicitacao as sol")
       .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
       .innerJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
+      .leftJoin("insumos as ins", "ins.ins_id", "sol.ins_id")
       .select(
         "sol.sol_id",
         "sol.pac_id",
         "sol.pos_id",
+        "sol.sol_insumo_quant",
         "sol.sol_data_solicitacao",
         "sol.sol_status",
         "sol.sol_observacao",
@@ -321,7 +323,9 @@ async buscarSolicitacaoPorId(req, res) {
         "pac.pac_nome",
         "pac.pac_cpf",
 
-        "pos.pos_nome"
+        "pos.pos_nome",
+
+         "ins.ins_nome"
       )
       .where("sol.sol_id", id)
       .first();
