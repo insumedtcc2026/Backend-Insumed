@@ -97,7 +97,8 @@ export default {
 
         .where(
           "sol.sol_status",
-          "Aprovado"
+          "Aprovado",
+          "Enviado"
         );
 
 
@@ -263,7 +264,8 @@ export default {
 
         .where(
           "sol_status",
-          "Aprovado"
+          "Aprovado",
+          "Enviado"
         )
 
         .first();
@@ -386,17 +388,14 @@ export default {
       // =====================================================
 
       if (
-        solicitacao.sol_status !== "Aprovado"
-      ) {
-
-        return res.status(400).json({
-
-          error:
-            "Somente prescrições aprovadas pelo administrador podem ser autorizadas."
-
-        });
-
-      }
+    solicitacao.sol_status !== "Aprovado" &&
+    solicitacao.sol_status !== "Enviado"
+) {
+    return res.status(400).json({
+        error:
+            "Somente prescrições aprovadas ou enviadas pelo administrador podem ser autorizadas."
+    });
+}
 
 
       // =====================================================
