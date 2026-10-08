@@ -36,95 +36,75 @@ export default {
   // já aprovou.
   // =========================================================
 
-  async buscarPrescricoesAprovadas(req, res) {
-
+ async buscarPrescricoesAprovadas(req, res) {
     try {
 
-         console.log("========== PRESCRIÇÕES APROVADAS ==========");
-    console.log("Sessão:", req.session);
+        console.log("========== PRESCRIÇÕES PARA AUTORIZADOR ==========");
 
-      const prescricoes = await knex("solicitacao as sol")
+        const prescricoes = await knex("solicitacao as sol")
+            .innerJoin(
+                "pacientes as pac",
+                "pac.pac_id",
+                "sol.pac_id"
+            )
+            .leftJoin(
+                "insumo as ins",
+                "ins.ins_id",
+                "sol.ins_id"
+            )
+            .leftJoin(
+                "postosdesaude as pos",
+                "pos.pos_id",
+                "sol.pos_id"
+            )
+            .select(
+                "sol.sol_id",
+                "sol.pac_id",
+                "sol.pos_id",
+                "sol.ins_id",
+                "sol.sol_status",
+                "sol.sol_data_solicitacao",
+                "sol.sol_data_vencimento",
+                "sol.sol_observacao",
+                "sol.sol_prescricao_tipo",
+                "sol.sol_insumo_quant",
 
-        .innerJoin(
-          "pacientes as pac",
-          "pac.pac_id",
-          "sol.pac_id"
-        )
+                "pac.pac_nome",
+                "pac.pac_cpf",
+                "pac.pac_avatar",
 
-        .leftJoin(
-          "insumo as ins",
-          "ins.ins_id",
-          "sol.ins_id"
-        )
+                "ins.ins_nome",
 
-        .leftJoin(
-          "postosdesaude as pos",
-          "pos.pos_id",
-          "sol.pos_id"
-        )
+                "pos.pos_nome"
+            )
+            .whereIn("sol.sol_status", [
+                "Aprovado",
+                "Enviado"
+            ])
+            .orderBy(
+                "sol.sol_data_solicitacao",
+                "asc"
+            );
 
-        .select(
-
-          // SOLICITAÇÃO
-          "sol.sol_id",
-          "sol.pac_id",
-          "sol.pos_id",
-          "sol.ins_id",
-
-          "sol.sol_status",
-
-          "sol.sol_data_solicitacao",
-          "sol.sol_data_vencimento",
-
-          "sol.sol_observacao",
-          "sol.sol_prescricao_tipo",
-
-          // QUANTIDADE SOLICITADA
-          "sol.sol_insumo_quant",
-
-          // PACIENTE
-          "pac.pac_nome",
-          "pac.pac_cpf",
-          "pac.pac_avatar",
-
-          // INSUMO
-          "ins.ins_nome",
-         
-
-          // POSTO
-          "pos.pos_nome"
-        )
-
-        .where(
-          "sol.sol_status",
-          "Aprovado",
-          "Enviado"
+        console.log(
+            "PRESCRIÇÕES ENCONTRADAS:",
+            prescricoes
         );
 
-
-     console.log("QUANTIDADE ENCONTRADA:", prescricoes.length);
-    console.log("DADOS:", prescricoes);
-
-      return res.status(200).json(
-        prescricoes
-      );
-
+        return res.status(200).json(prescricoes);
 
     } catch (error) {
 
-      console.error(
-        "Erro ao buscar prescrições aprovadas:",
-        error
-      );
+        console.error(
+            "ERRO COMPLETO AO BUSCAR PRESCRIÇÕES:",
+            error
+        );
 
-      return res.status(500).json({
-        error: "Erro ao buscar prescrições aprovadas."
-      });
-
+        return res.status(500).json({
+            error: error.message
+        });
     }
-
-  },
-
+},
 
   // =========================================================
   // BUSCAR UMA SOLICITAÇÃO APROVADA
