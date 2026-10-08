@@ -282,30 +282,90 @@ export default {
 
 
     // CONCLUIR AGENDAMENTO
-    async concluir(req, res) {
-        try {
-            const { id } = req.params;
+   async concluir(req, res) {
+    const trx = await knex.transaction();
 
-            const quantidadeAlterada = await knex('solicitacao')
-                .where('sol_id', id)
-                .update({ sol_status: 'concluido' });
+    try {
+        const { id } = req.params;
 
-            if (quantidadeAlterada === 0) {
-                return res.status(404).send({ message: 'Agendamento não encontrado' });
-            }
+        // Busca a solicitação
+        const solicitacao = await trx('solicitacao')
+            .where('sol_id', id)
+            .first();
 
-            return res.status(200).send({ message: 'Agendamento concluído' });
+        if (!solicitacao) {
+            await trx.rollback();
 
-        } catch (error) {
-            console.error('Erro ao concluir agendamento:', error);
-
-            return res.status(500).send({
-                message: 'Erro ao concluir agendamento',
-                error: error.message
+            return res.status(404).send({
+                message: 'Agendamento não encontrado'
             });
         }
-    },
 
+        const { ins_id, sol_insumo_quant } = solicitacao;
+
+        // Busca o insumo
+        const insumo = await trx('insumo')
+            .where('ins_id', ins_id)
+            .first();
+
+        if (!insumo) {
+            await trx.rollback();
+
+            return res.status(404).send({
+                message: 'Insumo não encontrado'
+            });
+        }
+
+        const quantidadeSolicitada = Number(sol_insumo_quant);
+        const estoqueAtual = Number(insumo.ins_quantidade);
+
+        // Verifica se existe estoque suficiente
+        if (estoqueAtual < quantidadeSolicitada) {
+            await trx.rollback();
+
+            return res.status(400).send({
+                message: 'Estoque insuficiente',
+                estoqueAtual,
+                quantidadeSolicitada
+            });
+        }
+
+        // Desconta a quantidade do estoque
+        await trx('insumo')
+            .where('ins_id', ins_id)
+            .update({
+                ins_quantidade: estoqueAtual - quantidadeSolicitada
+            });
+
+        // Marca o agendamento como concluído
+        await trx('solicitacao')
+            .where('sol_id', id)
+            .update({
+                sol_status: 'concluido'
+            });
+
+        // Confirma todas as alterações
+        await trx.commit();
+
+        return res.status(200).send({
+            message: 'Agendamento concluído e estoque atualizado',
+            ins_id,
+            quantidadeRetirada: quantidadeSolicitada,
+            estoqueAnterior: estoqueAtual,
+            estoqueAtualizado: estoqueAtual - quantidadeSolicitada
+        });
+
+    } catch (error) {
+        await trx.rollback();
+
+        console.error('Erro ao concluir agendamento:', error);
+
+        return res.status(500).send({
+            message: 'Erro ao concluir agendamento',
+            error: error.message
+        });
+    }
+},
 
     // CANCELAR AGENDAMENTO
     async cancelar(req, res) {
