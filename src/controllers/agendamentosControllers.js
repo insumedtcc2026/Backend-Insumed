@@ -288,7 +288,6 @@ export default {
     try {
         const { id } = req.params;
 
-        // Busca a solicitação
         const solicitacao = await trx('solicitacao')
             .where('sol_id', id)
             .first();
@@ -301,9 +300,17 @@ export default {
             });
         }
 
+        // Impede baixa duplicada
+        if (solicitacao.sol_status === 'concluido') {
+            await trx.rollback();
+
+            return res.status(400).send({
+                message: 'Este agendamento já foi concluído.'
+            });
+        }
+
         const { ins_id, sol_insumo_quant } = solicitacao;
 
-        // Busca o insumo
         const insumo = await trx('insumo')
             .where('ins_id', ins_id)
             .first();
@@ -319,7 +326,6 @@ export default {
         const quantidadeSolicitada = Number(sol_insumo_quant);
         const estoqueAtual = Number(insumo.ins_quantidade);
 
-        // Verifica se existe estoque suficiente
         if (estoqueAtual < quantidadeSolicitada) {
             await trx.rollback();
 
@@ -330,21 +336,18 @@ export default {
             });
         }
 
-        // Desconta a quantidade do estoque
         await trx('insumo')
             .where('ins_id', ins_id)
             .update({
                 ins_quantidade: estoqueAtual - quantidadeSolicitada
             });
 
-        // Marca o agendamento como concluído
         await trx('solicitacao')
             .where('sol_id', id)
             .update({
                 sol_status: 'concluido'
             });
 
-        // Confirma todas as alterações
         await trx.commit();
 
         return res.status(200).send({

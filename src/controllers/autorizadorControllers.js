@@ -200,7 +200,8 @@ export default {
         // prescrições que foram aprovadas.
         .where(
           "sol.sol_status",
-          "Aprovado"
+          "Aprovado",
+          "Enviado"
         )
 
         .first();
