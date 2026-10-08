@@ -282,94 +282,143 @@ export default {
 
 
     // CONCLUIR AGENDAMENTO
-   async concluir(req, res) {
+  async concluir(req, res) {
     const trx = await knex.transaction();
 
     try {
         const { id } = req.params;
 
-        const solicitacao = await trx('solicitacao')
-            .where('sol_id', id)
+        console.log("=================================");
+        console.log("CONCLUINDO AGENDAMENTO");
+        console.log("SOL_ID:", id);
+        console.log("=================================");
+
+        // Verifica se a solicitação/agendamento existe
+        const solicitacao = await trx("solicitacao")
+            .where("sol_id", id)
             .first();
 
         if (!solicitacao) {
             await trx.rollback();
 
             return res.status(404).send({
-                message: 'Agendamento não encontrado'
+                message: "Agendamento não encontrado"
             });
         }
 
-        // Impede baixa duplicada
-        if (solicitacao.sol_status === 'concluido') {
+        // Evita descontar o estoque duas vezes
+        if (solicitacao.sol_status === "concluido") {
             await trx.rollback();
 
             return res.status(400).send({
-                message: 'Este agendamento já foi concluído.'
+                message: "Este agendamento já foi concluído."
             });
         }
 
-        const { ins_id, sol_insumo_quant } = solicitacao;
+        // Busca os insumos vinculados à coleta
+        const itensColeta = await trx("coleta")
+            .where("sol_id", id);
 
-        const insumo = await trx('insumo')
-            .where('ins_id', ins_id)
-            .first();
+        console.log("ITENS DA COLETA:", itensColeta);
 
-        if (!insumo) {
-            await trx.rollback();
-
-            return res.status(404).send({
-                message: 'Insumo não encontrado'
-            });
-        }
-
-        const quantidadeSolicitada = Number(sol_insumo_quant);
-        const estoqueAtual = Number(insumo.ins_quantidade);
-
-        if (estoqueAtual < quantidadeSolicitada) {
+        if (!itensColeta.length) {
             await trx.rollback();
 
             return res.status(400).send({
-                message: 'Estoque insuficiente',
-                estoqueAtual,
-                quantidadeSolicitada
+                message: "Nenhum insumo encontrado para esta coleta."
             });
         }
 
-        await trx('insumo')
-            .where('ins_id', ins_id)
-            .update({
-                ins_quantidade: estoqueAtual - quantidadeSolicitada
-            });
+        // Processa cada insumo da coleta
+        for (const item of itensColeta) {
 
-        await trx('solicitacao')
-            .where('sol_id', id)
+            const insumo = await trx("insumo")
+                .where("ins_id", item.ins_id)
+                .first();
+
+            if (!insumo) {
+                await trx.rollback();
+
+                return res.status(404).send({
+                    message: `Insumo ${item.ins_id} não encontrado.`
+                });
+            }
+
+            const estoqueAtual = Number(insumo.ins_quantidade);
+            const quantidadeRetirada = Number(item.quantidade);
+
+            console.log("---------------------------------");
+            console.log("INSUMO:", item.ins_id);
+            console.log("ESTOQUE ATUAL:", estoqueAtual);
+            console.log("QUANTIDADE RETIRADA:", quantidadeRetirada);
+
+            if (quantidadeRetirada <= 0) {
+                await trx.rollback();
+
+                return res.status(400).send({
+                    message: `Quantidade inválida para o insumo ${item.ins_id}.`
+                });
+            }
+
+            if (estoqueAtual < quantidadeRetirada) {
+                await trx.rollback();
+
+                return res.status(400).send({
+                    message: "Estoque insuficiente",
+                    ins_id: item.ins_id,
+                    estoqueAtual,
+                    quantidadeRetirada
+                });
+            }
+
+            const novoEstoque =
+                estoqueAtual - quantidadeRetirada;
+
+            // Desconta o estoque
+            await trx("insumo")
+                .where("ins_id", item.ins_id)
+                .update({
+                    ins_quantidade: novoEstoque
+                });
+
+            console.log(
+                "NOVO ESTOQUE:",
+                novoEstoque
+            );
+        }
+
+        // Marca a solicitação como concluída
+        await trx("solicitacao")
+            .where("sol_id", id)
             .update({
-                sol_status: 'concluido'
+                sol_status: "concluido"
             });
 
         await trx.commit();
 
+        console.log("=================================");
+        console.log("COLETA CONCLUÍDA COM SUCESSO");
+        console.log("=================================");
+
         return res.status(200).send({
-            message: 'Agendamento concluído e estoque atualizado',
-            ins_id,
-            quantidadeRetirada: quantidadeSolicitada,
-            estoqueAnterior: estoqueAtual,
-            estoqueAtualizado: estoqueAtual - quantidadeSolicitada
+            message: "Agendamento concluído e estoque atualizado"
         });
 
     } catch (error) {
+
         await trx.rollback();
 
-        console.error('Erro ao concluir agendamento:', error);
+        console.error(
+            "ERRO AO CONCLUIR AGENDAMENTO:",
+            error
+        );
 
         return res.status(500).send({
-            message: 'Erro ao concluir agendamento',
+            message: "Erro ao concluir agendamento",
             error: error.message
         });
     }
 },
-
     // CANCELAR AGENDAMENTO
     async cancelar(req, res) {
         try {
