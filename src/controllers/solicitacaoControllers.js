@@ -82,7 +82,7 @@ async buscarprescricoespendetes(req, res) {
             .whereIn("sol.sol_status", [
                 "Pendente",
                 "Autorizado",
-                "Enviado"
+                "Revisado"
             ])
             .orderBy(
                 "sol.sol_data_solicitacao",
@@ -245,7 +245,7 @@ async alterarStatus(req, res) {
 
         // Quando o administrador enviar para o autorizador,
         // é obrigatório informar o insumo e a quantidade.
-        if (sol_status === "Enviado") {
+        if (sol_status === "Revisado") {
 
             if (!ins_id) {
                 return res.status(400).json({
@@ -267,7 +267,7 @@ async alterarStatus(req, res) {
 
         // Só altera insumo e quantidade quando estiver enviando
         // para o autorizador.
-        if (sol_status === "Enviado") {
+        if (sol_status === "Revisado") {
             dadosAtualizacao.ins_id = Number(ins_id);
             dadosAtualizacao.sol_insumo_quant = Number(sol_insumo_quant);
         }
@@ -393,7 +393,7 @@ async buscarHistoricoPrescricoes(req, res) {
             .whereIn("sol.sol_status", [
                 "Aprovado",
                 "Reenvio",
-                "Enviado"
+                "Revisado"
             ]);
 
         if (!admin.tp_universal) {

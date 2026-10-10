@@ -79,7 +79,7 @@ export default {
             )
             .whereIn("sol.sol_status", [
                 "Aprovado",
-                "Enviado"
+                "Revisado"
             ])
             .orderBy(
                 "sol.sol_data_solicitacao",
@@ -182,7 +182,7 @@ export default {
         .whereIn(
           "sol.sol_status",[
           "Aprovado",
-          "Enviado"
+          "Revisado"
           ]
         )
 
@@ -247,7 +247,7 @@ export default {
           "sol_status",
           [
           "Aprovado",
-          "Enviado"
+          "Revisado"
           ]
         )
 
@@ -372,7 +372,7 @@ export default {
 
       if (
     solicitacao.sol_status !== "Aprovado" &&
-    solicitacao.sol_status !== "Enviado"
+    solicitacao.sol_status !== "Revisado"
 ) {
     return res.status(400).json({
         error:
