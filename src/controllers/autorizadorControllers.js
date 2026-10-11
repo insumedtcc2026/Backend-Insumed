@@ -78,9 +78,11 @@ export default {
                 "pos.pos_nome"
             )
             .whereIn("sol.sol_status", [
-                "Aprovado",
-                "Revisado"
-            ])
+                 
+                 "Revisado",
+                 "Autorizado",
+                 "Nao Autorizado"
+])
             .orderBy(
                 "sol.sol_data_solicitacao",
                 "asc"
@@ -106,11 +108,11 @@ export default {
     }
 },
 
-  // =========================================================
+  
   // BUSCAR UMA SOLICITAÇÃO APROVADA
-  // =========================================================
+  
   // Usada quando o Autorizador clica em VER MAIS.
-  // =========================================================
+  
 
   async buscarSolicitacaoAprovada(req, res) {
 
@@ -365,10 +367,10 @@ export default {
       }
 
 
-      // =====================================================
+      
       // SÓ PODE AUTORIZAR UMA SOLICITAÇÃO APROVADA
       // PELO ADMINISTRADOR
-      // =====================================================
+     
 
       if (
     solicitacao.sol_status !== "Aprovado" &&
@@ -381,9 +383,9 @@ export default {
 }
 
 
-      // =====================================================
+      
       // ATUALIZAR STATUS
-      // =====================================================
+      
 
       await knex("solicitacao")
 
@@ -429,9 +431,9 @@ export default {
   },
 
 
-  // =========================================================
+  
   // CRIAR AUTORIZADOR
-  // =========================================================
+ 
 
   async createautorizador(req, res) {
 

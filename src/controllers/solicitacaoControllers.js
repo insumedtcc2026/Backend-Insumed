@@ -82,7 +82,8 @@ async buscarprescricoespendetes(req, res) {
             .whereIn("sol.sol_status", [
                 "Pendente",
                 "Autorizado",
-                "Revisado"
+                "Revisado",
+                "Nao Autorizado"
             ])
             .orderBy(
                 "sol.sol_data_solicitacao",
