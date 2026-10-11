@@ -153,6 +153,7 @@ export default {
 
           "sol.sol_data_solicitacao",
           "sol.sol_data_vencimento",
+          "sol.sol_motivo_nao_autorizado",
 
           "sol.sol_observacao",
           "sol.sol_prescricao_tipo",
@@ -181,12 +182,12 @@ export default {
 
         // O AUTORIZADOR só pode abrir
         // prescrições que foram aprovadas.
-        .whereIn(
-          "sol.sol_status",[
-          "Aprovado",
-          "Revisado"
-          ]
-        )
+       .whereIn("sol.sol_status", [
+    "Aprovado",
+    "Revisado",
+    "Autorizado",
+    "Nao Autorizado"
+])
 
         .first();
 
@@ -245,13 +246,12 @@ export default {
           id
         )
 
-        .whereIn(
-          "sol_status",
-          [
-          "Aprovado",
-          "Revisado"
-          ]
-        )
+       .whereIn("sol_status", [
+    "Aprovado",
+    "Revisado",
+    "Autorizado",
+    "Nao Autorizado"
+])
 
         .first();
 
@@ -319,121 +319,77 @@ export default {
   // Reenvio ou outros status.
   // =========================================================
 
-  async alterarStatusAutorizador(req, res) {
-
+ 
+async alterarStatusAutorizador(req, res) {
     try {
+        const { id } = req.params;
+        const { sol_status, sol_motivo_nao_autorizado } = req.body;
 
-      const { id } = req.params;
+        if (
+            sol_status !== "Autorizado" &&
+            sol_status !== "Nao Autorizado"
+        ) {
+            return res.status(400).json({
+                error: "Status inválido."
+            });
+        }
 
-      const { sol_status, sol_motivo_nao_autorizado } = req.body;
+        if (
+            sol_status === "Nao Autorizado" &&
+            !sol_motivo_nao_autorizado?.trim()
+        ) {
+            return res.status(400).json({
+                error: "Informe o motivo da não autorização."
+            });
+        }
 
+        // Buscar antes de atualizar
+        const solicitacao = await knex("solicitacao")
+            .where("sol_id", id)
+            .first();
 
-      // =====================================================
-      // VALIDAR STATUS
-      // =====================================================
+        if (!solicitacao) {
+            return res.status(404).json({
+                error: "Solicitação não encontrada."
+            });
+        }
 
-      if (
-        sol_status !== "Autorizado" &&
-        sol_status !== "Nao Autorizado"
-      ) {
+        // Impedir nova decisão sobre prescrições finalizadas
+        if (
+            solicitacao.sol_status !== "Aprovado" &&
+            solicitacao.sol_status !== "Revisado"
+        ) {
+            return res.status(400).json({
+                error: "Esta prescrição já foi finalizada ou não está disponível para análise."
+            });
+        }
 
-        return res.status(400).json({
-          error: "Status inválido."
+        await knex("solicitacao")
+            .where("sol_id", id)
+            .update({
+                sol_status,
+                sol_motivo_nao_autorizado:
+                    sol_status === "Nao Autorizado"
+                        ? sol_motivo_nao_autorizado.trim()
+                        : null
+            });
+
+        return res.status(200).json({
+            message: `Prescrição ${sol_status} com sucesso.`,
+            status: sol_status
         });
-
-      }
-
-
-      // =====================================================
-      // BUSCAR SOLICITAÇÃO
-      // =====================================================
-
-      const solicitacao = await knex("solicitacao")
-
-        .where(
-          "sol_id",id )
-        .update({
-        sol_status,
-        sol_motivo_nao_autorizado:
-            sol_status === "Nao Autorizado"
-                ? sol_motivo_nao_autorizado?.trim()
-                : null
-    });
-
-        
-
-
-      if (!solicitacao) {
-
-        return res.status(404).json({
-          error: "Solicitação não encontrada."
-        });
-
-      }
-
-
-      
-      // SÓ PODE AUTORIZAR UMA SOLICITAÇÃO APROVADA
-      // PELO ADMINISTRADOR
-     
-
-      if (
-    solicitacao.sol_status !== "Aprovado" &&
-    solicitacao.sol_status !== "Revisado"
-) {
-    return res.status(400).json({
-        error:
-            "Somente prescrições aprovadas ou enviadas pelo administrador podem ser autorizadas."
-    });
-}
-
-
-      
-      // ATUALIZAR STATUS
-      
-
-      await knex("solicitacao")
-
-        .where(
-          "sol_id",
-          id
-        )
-
-        .update({
-
-          sol_status: sol_status
-
-        });
-
-
-      return res.status(200).json({
-
-        message:
-          `Prescrição ${sol_status} com sucesso.`,
-
-        status:
-          sol_status
-
-      });
-
 
     } catch (error) {
+        console.error(
+            "Erro ao alterar status pelo autorizador:",
+            error
+        );
 
-      console.error(
-        "Erro ao alterar status pelo autorizador:",
-        error
-      );
-
-      return res.status(500).json({
-
-        error:
-          "Erro ao alterar status da prescrição."
-
-      });
-
+        return res.status(500).json({
+            error: "Erro ao alterar status da prescrição."
+        });
     }
-
-  },
+},
 
 
   
