@@ -11,6 +11,7 @@ import insumosControllers from "./controllers/insumosControllers.js";
 import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
 import autorizadorControllers from "./controllers/autorizadorControllers.js";
 import autorizarAut from "./middleware/autorizarAut.js";
+import autorizarVisualizacaoPrescricao from "./middleware/autorizarVisualizacaoPrescricao.js";
 
 
 const routes = express.Router();
@@ -63,6 +64,7 @@ routes.get(
   '/autorizador/solicitacao/:id/prescricao',
   authorization,
   autorizarAut,
+  autorizarVisualizacaoPrescricao,
   autorizadorControllers.buscarPrescricaoAprovada
 );
 
@@ -70,6 +72,7 @@ routes.patch(
   '/autorizador/solicitacao/:id',
   authorization,
   autorizarAut,
+  autorizarVisualizacaoPrescricao,
   autorizadorControllers.alterarStatusAutorizador
 );
 
