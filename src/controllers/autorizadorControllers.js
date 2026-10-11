@@ -325,7 +325,7 @@ export default {
 
       const { id } = req.params;
 
-      const { sol_status } = req.body;
+      const { sol_status, sol_motivo_nao_autorizado } = req.body;
 
 
       // =====================================================
@@ -351,11 +351,16 @@ export default {
       const solicitacao = await knex("solicitacao")
 
         .where(
-          "sol_id",
-          id
-        )
+          "sol_id",id )
+        .update({
+        sol_status,
+        sol_motivo_nao_autorizado:
+            sol_status === "Nao Autorizado"
+                ? sol_motivo_nao_autorizado?.trim()
+                : null
+    });
 
-        .first();
+        
 
 
       if (!solicitacao) {
