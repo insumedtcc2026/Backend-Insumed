@@ -3,9 +3,9 @@ import bcrypt from 'bcrypt';
 
 export default {
 
-  // =========================================================
+  
   // BUSCAR TODOS OS AUTORIZADORES
-  // =========================================================
+
 
   async autorizadorrall(req, res) {
     try {
@@ -27,14 +27,14 @@ export default {
   },
 
 
-  // =========================================================
+  
   // BUSCAR PRESCRIÇÕES APROVADAS
-  // =========================================================
+ 
   // Essa função é usada na tela do Autorizador.
-  //
+  
   // Ela busca somente solicitações que o ADMINISTRADOR
   // já aprovou.
-  // =========================================================
+  
 
  async buscarPrescricoesAprovadas(req, res) {
     try {
@@ -119,7 +119,14 @@ export default {
     try {
 
       const { id } = req.params;
+console.log("ID recebido em buscarSolicitacaoAprovada:", id);
 
+if (!/^\d+$/.test(id)) {
+  return res.status(400).json({
+    error: "ID da solicitação inválido.",
+    idRecebido: id
+  });
+}
 
       const solicitacao = await knex("solicitacao as sol")
 
@@ -153,7 +160,7 @@ export default {
 
           "sol.sol_data_solicitacao",
           "sol.sol_data_vencimento",
-          
+          "sol.sol_motivo_nao_autorizado",
 
           "sol.sol_observacao",
           "sol.sol_prescricao_tipo",
@@ -222,9 +229,8 @@ export default {
   },
 
 
-  // =========================================================
+  
   // BUSCAR IMAGEM DA PRESCRIÇÃO APROVADA
-  // =========================================================
 
   async buscarPrescricaoAprovada(req, res) {
 
@@ -238,7 +244,8 @@ export default {
         .select(
           "sol_prescricao",
           "sol_prescricao_tipo",
-          "sol_status"
+          "sol_status",
+          
         )
 
         .where(
@@ -247,7 +254,7 @@ export default {
         )
 
        .whereIn("sol_status", [
-    "Aprovado",
+    
     "Revisado",
     "Autorizado",
     "Nao Autorizado"
@@ -306,18 +313,17 @@ export default {
   },
 
 
-  // =========================================================
   // AUTORIZAR OU NÃO AUTORIZAR
-  // =========================================================
+
   //
   // O AUTORIZADOR só pode escolher:
-  //
+
   // Autorizado
   // Nao Autorizado
-  //
+
   // Ele não pode alterar diretamente para Aprovado,
   // Reenvio ou outros status.
-  // =========================================================
+  
 
  
 async alterarStatusAutorizador(req, res) {
@@ -363,21 +369,33 @@ async alterarStatusAutorizador(req, res) {
                 error: "Esta prescrição já foi finalizada ou não está disponível para análise."
             });
         }
+const motivoSalvo =
+    sol_status === "Nao Autorizado"
+        ? sol_motivo_nao_autorizado.trim()
+        : null;
 
-        await knex("solicitacao")
-            .where("sol_id", id)
-            .update({
-                sol_status,
-                sol_motivo_nao_autorizado:
-                    sol_status === "Nao Autorizado"
-                        ? sol_motivo_nao_autorizado.trim()
-                        : null
-            });
+await knex("solicitacao")
+    .where("sol_id", id)
+    .update({
+        sol_status,
+        sol_motivo_nao_autorizado: motivoSalvo,
+    });
 
-        return res.status(200).json({
-            message: `Prescrição ${sol_status} com sucesso.`,
-            status: sol_status
-        });
+const solicitacaoAtualizada = await knex("solicitacao")
+    .select(
+        "sol_id",
+        "sol_status",
+        "sol_motivo_nao_autorizado"
+    )
+    .where("sol_id", id)
+    .first();
+
+console.log("Solicitação atualizada:", solicitacaoAtualizada);
+
+return res.status(200).json({
+    message: "Prescrição atualizada com sucesso.",
+    solicitacao: solicitacaoAtualizada,
+});
 
     } catch (error) {
         console.error(

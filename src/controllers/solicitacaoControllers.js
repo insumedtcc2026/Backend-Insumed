@@ -129,39 +129,57 @@ async buscarprescricoespendetes(req, res) {
     }
 },
 
+
+
 async buscarPrescricao(req, res) {
-    try {
-        const { id } = req.params;
+  try {
+    const { id } = req.params;
 
-        const solicitacao = await knex("solicitacao")
-            .select("sol_prescricao")
-            .where("sol_id", id)
-            .first();
+    const solicitacao = await knex("solicitacao")
+      .select("sol_prescricao", "sol_prescricao_tipo")
+      .where("sol_id", id)
+      .first();
 
-        if (!solicitacao) {
-            return res.status(404).json({
-                error: "Solicitação não encontrada"
-            });
-        }
-
-        if (!solicitacao.sol_prescricao) {
-            return res.status(404).json({
-                error: "Prescrição não encontrada"
-            });
-        }
-
-        res.setHeader("Content-Type", "image/png");
-
-        return res.send(solicitacao.sol_prescricao);
-
-    } catch (error) {
-        console.error("Erro ao buscar prescrição:", error);
-
-        return res.status(500).json({
-            error: error.message
-        });
+    if (!solicitacao) {
+      return res.status(404).json({
+        error: "Solicitação não encontrada"
+      });
     }
+
+    if (!solicitacao.sol_prescricao) {
+      return res.status(404).json({
+        error: "Prescrição não encontrada"
+      });
+    }
+
+    const tipoImagem =
+      solicitacao.sol_prescricao_tipo || "image/jpeg";
+
+    const tiposPermitidos = [
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ];
+
+    res.setHeader(
+      "Content-Type",
+      tiposPermitidos.includes(tipoImagem)
+        ? tipoImagem
+        : "application/octet-stream"
+    );
+
+    return res.send(solicitacao.sol_prescricao);
+
+  } catch (error) {
+    console.error("Erro ao buscar prescrição:", error);
+
+    return res.status(500).json({
+      error: "Erro ao buscar prescrição"
+    });
+  }
 },
+
+
    // Buscar prescrições atraves do id do paciente
  async prescicaodopaciente (req, res) {
   try {
@@ -303,11 +321,10 @@ async alterarStatus(req, res) {
         });
     }
 },
+
 async buscarSolicitacaoPorId(req, res) {
   try {
     const { id } = req.params;
-
-    console.log("ID recebido:", id);
 
     const solicitacao = await knex("solicitacao as sol")
       .leftJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
@@ -322,6 +339,8 @@ async buscarSolicitacaoPorId(req, res) {
         "sol.sol_data_solicitacao",
         "sol.sol_status",
         "sol.sol_observacao",
+        "sol.sol_prescricao_tipo",
+        "sol.sol_motivo_nao_autorizado",
         "sol.sol_data_vencimento",
         "pac.pac_nome",
         "pac.pac_cpf",
@@ -330,8 +349,6 @@ async buscarSolicitacaoPorId(req, res) {
       )
       .where("sol.sol_id", id)
       .first();
-
-    console.log("RESULTADO:", solicitacao);
 
     if (!solicitacao) {
       return res.status(404).json({
@@ -342,14 +359,14 @@ async buscarSolicitacaoPorId(req, res) {
     return res.status(200).json(solicitacao);
 
   } catch (error) {
-    console.error("ERRO COMPLETO:", error);
+    console.error("Erro ao buscar solicitação:", error);
 
     return res.status(500).json({
-      error: error.message,
-      stack: error.stack
+      error: "Erro ao buscar solicitação"
     });
   }
 },
+
 
 //buscar historico das prescrições 
 async buscarHistoricoPrescricoes(req, res) {
@@ -394,7 +411,8 @@ async buscarHistoricoPrescricoes(req, res) {
             .whereIn("sol.sol_status", [
                 "Aprovado",
                 "Reenvio",
-                "Revisado"
+                "Revisado",
+                "Nao Autorizado"
             ]);
 
         if (!admin.tp_universal) {

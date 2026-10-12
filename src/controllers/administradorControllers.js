@@ -233,9 +233,8 @@ console.log(
             }
         }
 
-        // ==========================================
         // 2. TENTA LOGIN COMO PACIENTE
-        // ==========================================
+       
 
         if (paciente) {
             const senhaValida = await bcrypt.compare(
