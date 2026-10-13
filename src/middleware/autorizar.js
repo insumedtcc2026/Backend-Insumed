@@ -1,40 +1,33 @@
 import jsonwebtoken from "jsonwebtoken";
 
-
+// Valida o token "Bearer" e coloca os dados do usuário em req.session.
+// Não registra o token nem o conteúdo decodificado nos logs (dados pessoais).
 export default (req, res, next) => {
 
-     try {
-        console.log('Realizando Autentificação');
+    try {
         const authHeader = req.headers.authorization;
-         console.log("Authorization recebido:", authHeader);
 
-        if(!authHeader) {
-            return res.status(401).send({error: 'Token não fornecido'});
+        if (!authHeader) {
+            return res.status(401).send({ error: 'Token não fornecido' });
         }
 
-        console.log(
-    "ACCESS_TOKEN_SECRET existe?",
-    !!process.env.ACCESS_TOKEN_SECRET
-);
         const partsToken = authHeader.split(' ');
-         console.log("Partes do token:", partsToken.length);
-        if (partsToken.length !=2){
-            return res.status(401).send({error: 'Token inválido'});
+        if (partsToken.length != 2) {
+            return res.status(401).send({ error: 'Token inválido' });
         }
 
         const [scheme, token] = partsToken;
-        if(!/^Bearer$/i.test(scheme)){
-            return res.status(401).send({error: 'Token incoerente do padrão'});
+        if (!/^Bearer$/i.test(scheme)) {
+            return res.status(401).send({ error: 'Token incoerente do padrão' });
         }
-        const decode = jsonwebtoken.verify(token, process.env.ACCESS_TOKEN_SECRET);
-        console.log('Token decodificado:');
-        console.log("Token decodificado:", decode);
+
+        const decode = jsonwebtoken.verify(token, process.env.ACCESS_TOKEN_SECRET, {
+            algorithms: ["HS256"]
+        });
         req.session = decode;
         return next();
 
     } catch (error) {
-        console.log("Erro JWT:", error);
-
         if (
             error.name === "JsonWebTokenError" ||
             error.name === "TokenExpiredError"
@@ -44,9 +37,10 @@ export default (req, res, next) => {
             });
         }
 
+        console.error("Erro ao validar token:", error.name);
+
         return res.status(500).send({
             error: "Erro interno do servidor"
         });
     }
 };
-console.log("VERSAO NOVA DO MIDDLEWARE");

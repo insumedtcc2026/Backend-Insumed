@@ -1,4 +1,5 @@
 import knex from '../database/index.js';
+import { dataHojeBrasil, validarDataISO, validarMotivo } from '../utils/validacoes.js';
 
 // Monta o protocolo de atendimento a partir do sol_id, ex: sol_id 42 -> "AG000042"
 function gerarProtocolo(sol_id) {
@@ -18,6 +19,9 @@ function agruparPorAgendamento(resultado) {
                 sol_protocolo: linha.sol_protocolo,
                 sol_data_de_coleta: linha.sol_data_de_coleta,
                 status: linha.sol_status,
+                sol_motivo_cancelamento: linha.sol_motivo_cancelamento ?? null,
+                sol_data_cancelamento: linha.sol_data_cancelamento ?? null,
+                sol_origem_id: linha.sol_origem_id ?? null,
 
                 paciente: {
                     pac_id: linha.pac_id,
@@ -54,6 +58,9 @@ const SELECT_AGENDAMENTO = [
     'sol.sol_protocolo',
     'sol.sol_data_de_coleta',
     'sol.sol_status',
+    'sol.sol_motivo_cancelamento',
+    'sol.sol_data_cancelamento',
+    'sol.sol_origem_id',
 
     'pac.pac_id',
     'pac.pac_nome',
@@ -68,6 +75,13 @@ const SELECT_AGENDAMENTO = [
 
     'col.quantidade'
 ];
+
+const STATUS_AGENDAMENTO = ['agendado', 'concluido', 'cancelado'];
+
+// Agendamento "ativo" = ainda conta como atendimento daquela prescrição.
+const STATUS_AGENDAMENTO_ATIVO = ['agendado', 'concluido'];
+
+const TAMANHO_MAX_NOME_INSUMO = 100;
 
 function baseQueryAgendamentos() {
     return knex('solicitacao as sol')
@@ -101,6 +115,18 @@ export default {
                 excluir_data,
                 order
             } = req.query;
+
+            if (status && !['todos', ...STATUS_AGENDAMENTO].includes(status)) {
+                return res.status(400).send({ message: 'Filtro de status inválido.' });
+            }
+
+            if ((data_inicio && validarDataISO(data_inicio)) || (data_fim && validarDataISO(data_fim))) {
+                return res.status(400).send({ message: 'Intervalo de datas inválido.' });
+            }
+
+            if (data_inicio && data_fim && data_inicio > data_fim) {
+                return res.status(400).send({ message: 'A data inicial não pode ser maior que a data final.' });
+            }
 
             let query = baseQueryAgendamentos();
 
@@ -155,8 +181,7 @@ export default {
             console.error('Erro ao buscar agendamentos:', error);
 
             return res.status(500).send({
-                message: 'Erro ao buscar agendamentos',
-                error: error.message
+                message: 'Erro ao buscar agendamentos'
             });
         }
     },
@@ -169,36 +194,107 @@ export default {
 
         try {
 
-            const { paciente, sol_data_de_coleta, posto, itens } = req.body;
+            const { paciente, sol_data_de_coleta, posto, itens, sol_origem_id } = req.body ?? {};
 
             // VALIDAÇÕES
 
-            if (!paciente || !paciente.pac_id) {
+            const falhar = async (status, message) => {
                 await trx.rollback();
-                return res.status(400).send({ message: 'Paciente não informado' });
+                return res.status(status).send({ message });
+            };
+
+            const pac_id = Number(paciente?.pac_id);
+            if (!Number.isInteger(pac_id) || pac_id <= 0) {
+                return falhar(400, 'Paciente não informado');
             }
 
-            if (!posto || !posto.pos_id) {
-                await trx.rollback();
-                return res.status(400).send({ message: 'Posto não informado' });
+            const pos_id = Number(posto?.pos_id);
+            if (!Number.isInteger(pos_id) || pos_id <= 0) {
+                return falhar(400, 'Posto não informado');
             }
 
             if (!sol_data_de_coleta) {
-                await trx.rollback();
-                return res.status(400).send({ message: 'Data de coleta não informada' });
+                return falhar(400, 'Data de coleta não informada');
+            }
+
+            if (validarDataISO(sol_data_de_coleta)) {
+                return falhar(400, 'Data de coleta inválida');
+            }
+
+            if (sol_data_de_coleta < dataHojeBrasil()) {
+                return falhar(400, 'A data da coleta não pode estar no passado');
             }
 
             if (!Array.isArray(itens) || itens.length === 0) {
-                await trx.rollback();
-                return res.status(400).send({ message: 'Nenhum insumo informado' });
+                return falhar(400, 'Nenhum insumo informado');
             }
 
             for (const item of itens) {
-                if (!item.ins_nome || !String(item.ins_nome).trim() || !item.quantidade) {
-                    await trx.rollback();
-                    return res.status(400).send({
-                        message: 'Cada insumo precisa de nome e quantidade'
-                    });
+                const nome = typeof item?.ins_nome === 'string' ? item.ins_nome.trim() : '';
+                const quantidade = Number(item?.quantidade);
+
+                if (!nome || !Number.isFinite(quantidade)) {
+                    return falhar(400, 'Cada insumo precisa de nome e quantidade');
+                }
+
+                if (nome.length > TAMANHO_MAX_NOME_INSUMO) {
+                    return falhar(400, `O nome do insumo deve ter no máximo ${TAMANHO_MAX_NOME_INSUMO} caracteres`);
+                }
+
+                if (!Number.isInteger(quantidade) || quantidade <= 0) {
+                    return falhar(400, `Quantidade inválida para "${nome}". Informe um número inteiro maior que zero`);
+                }
+            }
+
+            const pacienteExiste = await trx('pacientes').where('pac_id', pac_id).first('pac_id');
+            if (!pacienteExiste) {
+                return falhar(404, 'Paciente não encontrado');
+            }
+
+            const postoExiste = await trx('postosdesaude').where('pos_id', pos_id).first('pos_id');
+            if (!postoExiste) {
+                return falhar(404, 'Posto de coleta não encontrado');
+            }
+
+            // VÍNCULO COM A PRESCRIÇÃO AUTORIZADA (quando o agendamento
+            // nasce de "Agendar" numa prescrição autorizada)
+            let origemId = null;
+
+            if (sol_origem_id !== undefined && sol_origem_id !== null && sol_origem_id !== '') {
+                origemId = Number(sol_origem_id);
+
+                if (!Number.isInteger(origemId) || origemId <= 0) {
+                    return falhar(400, 'Prescrição de origem inválida');
+                }
+
+                // trava a prescrição: dois cliques simultâneos esperam um pelo outro
+                const origem = await trx('solicitacao')
+                    .where('sol_id', origemId)
+                    .forUpdate()
+                    .first('sol_id', 'pac_id', 'sol_status');
+
+                if (!origem) {
+                    return falhar(404, 'Prescrição de origem não encontrada');
+                }
+
+                if (origem.sol_status !== 'Autorizado') {
+                    return falhar(400, 'Só é possível agendar prescrições autorizadas');
+                }
+
+                if (Number(origem.pac_id) !== pac_id) {
+                    return falhar(400, 'O paciente selecionado não é o paciente desta prescrição');
+                }
+
+                const agendamentoAtivo = await trx('solicitacao')
+                    .where('sol_origem_id', origemId)
+                    .whereIn('sol_status', STATUS_AGENDAMENTO_ATIVO)
+                    .first('sol_id', 'sol_protocolo');
+
+                if (agendamentoAtivo) {
+                    return falhar(
+                        409,
+                        `Esta prescrição já possui um agendamento (protocolo ${agendamentoAtivo.sol_protocolo ?? agendamentoAtivo.sol_id})`
+                    );
                 }
             }
 
@@ -206,11 +302,12 @@ export default {
 
             const resultado = await trx('solicitacao')
                 .insert({
-                    pac_id: paciente.pac_id,
-                    pos_id: posto.pos_id,
+                    pac_id,
+                    pos_id,
                     sol_data_de_coleta,
                     sol_status: 'agendado',
-                    sol_insumo_quant: 0
+                    sol_insumo_quant: 0,
+                    sol_origem_id: origemId
                 })
                 .returning('sol_id');
 
@@ -255,7 +352,7 @@ export default {
                         typeof novoInsumo[0] === 'object' ? novoInsumo[0].ins_id : novoInsumo[0];
                 }
 
-                linhasColeta.push({ sol_id, ins_id, quantidade: item.quantidade });
+                linhasColeta.push({ sol_id, ins_id, quantidade: Number(item.quantidade) });
             }
 
             await trx('coleta').insert(linhasColeta);
@@ -269,177 +366,171 @@ export default {
             });
 
         } catch (error) {
-            await trx.rollback();
+            if (!trx.isCompleted()) await trx.rollback();
+
+            // índice único ux_solicitacao_origem_ativa: outra requisição
+            // agendou a mesma prescrição ao mesmo tempo
+            if (error.code === '23505') {
+                return res.status(409).send({
+                    message: 'Esta prescrição já possui um agendamento'
+                });
+            }
 
             console.error('Erro ao criar agendamento:', error);
 
             return res.status(500).send({
-                message: 'Erro ao criar agendamento',
-                error: error.message
+                message: 'Erro ao criar agendamento'
             });
         }
     },
 
 
     // CONCLUIR AGENDAMENTO
-  async concluir(req, res) {
-    const trx = await knex.transaction();
+    //
+    // Desconta o estoque de cada insumo e marca como concluído, tudo na
+    // mesma transação. A linha do agendamento é travada (FOR UPDATE) para
+    // que dois cliques/requisições simultâneos não descontem o estoque duas vezes.
+    async concluir(req, res) {
+        const trx = await knex.transaction();
 
-    try {
-        const { id } = req.params;
-
-        console.log("=================================");
-        console.log("CONCLUINDO AGENDAMENTO");
-        console.log("SOL_ID:", id);
-        console.log("=================================");
-
-        // Verifica se a solicitação/agendamento existe
-        const solicitacao = await trx("solicitacao")
-            .where("sol_id", id)
-            .first();
-
-        if (!solicitacao) {
+        const falhar = async (status, corpo) => {
             await trx.rollback();
+            return res.status(status).send(corpo);
+        };
 
-            return res.status(404).send({
-                message: "Agendamento não encontrado"
-            });
-        }
-
-        // Evita descontar o estoque duas vezes
-        if (solicitacao.sol_status === "concluido") {
-            await trx.rollback();
-
-            return res.status(400).send({
-                message: "Este agendamento já foi concluído."
-            });
-        }
-
-        // Busca os insumos vinculados à coleta
-        const itensColeta = await trx("coleta")
-            .where("sol_id", id);
-
-        console.log("ITENS DA COLETA:", itensColeta);
-
-        if (!itensColeta.length) {
-            await trx.rollback();
-
-            return res.status(400).send({
-                message: "Nenhum insumo encontrado para esta coleta."
-            });
-        }
-
-        // Processa cada insumo da coleta
-        for (const item of itensColeta) {
-
-            const insumo = await trx("insumo")
-                .where("ins_id", item.ins_id)
-                .first();
-
-            if (!insumo) {
-                await trx.rollback();
-
-                return res.status(404).send({
-                    message: `Insumo ${item.ins_id} não encontrado.`
-                });
-            }
-
-            const estoqueAtual = Number(insumo.ins_quantidade);
-            const quantidadeRetirada = Number(item.quantidade);
-
-            console.log("---------------------------------");
-            console.log("INSUMO:", item.ins_id);
-            console.log("ESTOQUE ATUAL:", estoqueAtual);
-            console.log("QUANTIDADE RETIRADA:", quantidadeRetirada);
-
-            if (quantidadeRetirada <= 0) {
-                await trx.rollback();
-
-                return res.status(400).send({
-                    message: `Quantidade inválida para o insumo ${item.ins_id}.`
-                });
-            }
-
-            if (estoqueAtual < quantidadeRetirada) {
-                await trx.rollback();
-
-                return res.status(400).send({
-                    message: "Estoque insuficiente",
-                    ins_id: item.ins_id,
-                    estoqueAtual,
-                    quantidadeRetirada
-                });
-            }
-
-            const novoEstoque =
-                estoqueAtual - quantidadeRetirada;
-
-            // Desconta o estoque
-            await trx("insumo")
-                .where("ins_id", item.ins_id)
-                .update({
-                    ins_quantidade: novoEstoque
-                });
-
-            console.log(
-                "NOVO ESTOQUE:",
-                novoEstoque
-            );
-        }
-
-        // Marca a solicitação como concluída
-        await trx("solicitacao")
-            .where("sol_id", id)
-            .update({
-                sol_status: "concluido"
-            });
-
-        await trx.commit();
-
-        console.log("=================================");
-        console.log("COLETA CONCLUÍDA COM SUCESSO");
-        console.log("=================================");
-
-        return res.status(200).send({
-            message: "Agendamento concluído e estoque atualizado"
-        });
-
-    } catch (error) {
-
-        await trx.rollback();
-
-        console.error(
-            "ERRO AO CONCLUIR AGENDAMENTO:",
-            error
-        );
-
-        return res.status(500).send({
-            message: "Erro ao concluir agendamento",
-            error: error.message
-        });
-    }
-},
-    // CANCELAR AGENDAMENTO
-    async cancelar(req, res) {
         try {
             const { id } = req.params;
 
-            const quantidadeAlterada = await knex('solicitacao')
+            const solicitacao = await trx('solicitacao')
                 .where('sol_id', id)
-                .update({ sol_status: 'cancelado' });
+                .whereIn('sol_status', STATUS_AGENDAMENTO)
+                .forUpdate()
+                .first('sol_id', 'sol_status');
 
-            if (quantidadeAlterada === 0) {
-                return res.status(404).send({ message: 'Agendamento não encontrado' });
+            if (!solicitacao) {
+                return falhar(404, { message: 'Agendamento não encontrado' });
             }
 
-            return res.status(200).send({ message: 'Agendamento cancelado' });
+            if (solicitacao.sol_status === 'concluido') {
+                return falhar(409, { message: 'Este agendamento já foi concluído.' });
+            }
+
+            if (solicitacao.sol_status === 'cancelado') {
+                return falhar(409, { message: 'Não é possível concluir um agendamento cancelado.' });
+            }
+
+            const itensColeta = await trx('coleta').where('sol_id', id);
+
+            if (!itensColeta.length) {
+                return falhar(400, { message: 'Nenhum insumo encontrado para esta coleta.' });
+            }
+
+            for (const item of itensColeta) {
+                const insumo = await trx('insumo')
+                    .where('ins_id', item.ins_id)
+                    .forUpdate()
+                    .first();
+
+                if (!insumo) {
+                    return falhar(404, { message: `Insumo ${item.ins_id} não encontrado.` });
+                }
+
+                const estoqueAtual = Number(insumo.ins_quantidade);
+                const quantidadeRetirada = Number(item.quantidade);
+
+                if (!(quantidadeRetirada > 0)) {
+                    return falhar(400, { message: `Quantidade inválida para o insumo ${insumo.ins_nome}.` });
+                }
+
+                if (estoqueAtual < quantidadeRetirada) {
+                    return falhar(400, {
+                        message: `Estoque insuficiente de ${insumo.ins_nome}: disponível ${estoqueAtual}, necessário ${quantidadeRetirada}.`,
+                        ins_id: item.ins_id,
+                        estoqueAtual,
+                        quantidadeRetirada
+                    });
+                }
+
+                await trx('insumo')
+                    .where('ins_id', item.ins_id)
+                    .update({ ins_quantidade: estoqueAtual - quantidadeRetirada });
+            }
+
+            await trx('solicitacao')
+                .where('sol_id', id)
+                .update({ sol_status: 'concluido' });
+
+            await trx.commit();
+
+            return res.status(200).send({
+                message: 'Agendamento concluído e estoque atualizado'
+            });
+
+        } catch (error) {
+            if (!trx.isCompleted()) await trx.rollback();
+
+            console.error('Erro ao concluir agendamento:', error);
+
+            return res.status(500).send({
+                message: 'Erro ao concluir agendamento'
+            });
+        }
+    },
+
+    // CANCELAR AGENDAMENTO
+    //
+    // Mesmo padrão da "não autorização" do autorizador: motivo em texto
+    // livre, obrigatório. Só agendamentos com status 'agendado' podem ser
+    // cancelados; o UPDATE condicional garante isso mesmo com duas
+    // requisições ao mesmo tempo (status + motivo gravados juntos).
+    async cancelar(req, res) {
+        try {
+            const { id } = req.params;
+            const motivo = req.body?.motivo;
+
+            const erroMotivo = validarMotivo(motivo, 'do cancelamento');
+            if (erroMotivo) {
+                return res.status(400).send({ message: erroMotivo });
+            }
+
+            const [cancelado] = await knex('solicitacao')
+                .where('sol_id', id)
+                .where('sol_status', 'agendado')
+                .update({
+                    sol_status: 'cancelado',
+                    sol_motivo_cancelamento: motivo.trim(),
+                    sol_data_cancelamento: knex.fn.now(),
+                    sol_cancelado_por: req.session?.id ?? null
+                })
+                .returning(['sol_id', 'sol_status', 'sol_motivo_cancelamento', 'sol_data_cancelamento']);
+
+            if (!cancelado) {
+                const atual = await knex('solicitacao')
+                    .where('sol_id', id)
+                    .whereIn('sol_status', STATUS_AGENDAMENTO)
+                    .first('sol_status');
+
+                if (!atual) {
+                    return res.status(404).send({ message: 'Agendamento não encontrado' });
+                }
+
+                return res.status(409).send({
+                    message: atual.sol_status === 'cancelado'
+                        ? 'Este agendamento já foi cancelado.'
+                        : 'Não é possível cancelar um agendamento já concluído.'
+                });
+            }
+
+            return res.status(200).send({
+                message: 'Agendamento cancelado',
+                agendamento: cancelado
+            });
 
         } catch (error) {
             console.error('Erro ao cancelar agendamento:', error);
 
             return res.status(500).send({
-                message: 'Erro ao cancelar agendamento',
-                error: error.message
+                message: 'Erro ao cancelar agendamento'
             });
         }
     },
@@ -453,7 +544,7 @@ export default {
             }
 
             const page = Number(req.query.page) || 1;
-            const porPagina = Number(req.query.porPagina) || 4;
+            const porPagina = Math.min(Math.max(Number(req.query.porPagina) || 4, 1), 50);
             const offset = (page - 1) * porPagina;
 
             const resultado = await baseQueryAgendamentos()
@@ -474,8 +565,7 @@ export default {
             console.error('Erro ao buscar meus agendamentos:', error);
 
             return res.status(500).send({
-                message: 'Erro ao buscar seus agendamentos',
-                error: error.message
+                message: 'Erro ao buscar seus agendamentos'
             });
         }
     },
@@ -506,8 +596,7 @@ export default {
             console.error('Erro ao buscar próximo agendamento:', error);
 
             return res.status(500).send({
-                message: 'Erro ao buscar próximo agendamento',
-                error: error.message
+                message: 'Erro ao buscar próximo agendamento'
             });
         }
     }

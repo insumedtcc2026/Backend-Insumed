@@ -4,7 +4,8 @@
   "description": "Servidor backend tcc Insumed ",
   "main": "server.js",
   "scripts": {
-    "start": "nodemon src/server.js"
+    "start": "nodemon src/server.js",
+    "test": "node --experimental-test-module-mocks --test testes/api.test.mjs"
   },
   "keywords": [],
   "author": "Projeto Insumed",
@@ -20,6 +21,8 @@
     "pg": "^8.21.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "pg-mem": "^3.0.14",
+    "supertest": "^7.3.1"
   }
 }

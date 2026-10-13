@@ -1,49 +1,73 @@
 import knex from '../database/index.js';
 import bcrypt from 'bcrypt';
 import jsonwebtoken from 'jsonwebtoken';
+import {
+  coletarErros, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome, somenteDigitos,
+  validarConfirmacaoSenha, validarCPF, validarEmail, validarNome, validarObrigatorio,
+  validarSenha, validarTelefone, whereCpf,
+} from '../utils/validacoes.js';
+import { registrarFalhaLogin, registrarSucessoLogin } from '../middleware/limiteLogin.js';
 
 export default {
 
   // busca todos os administradores
   async administradorall(req, res) {
     try {
-      const dados = await knex('administrador'); 
-      console.log(dados);
+      const dados = (await knex('administrador')).map(({ adm_senha, ...resto }) => resto);
       return res.status(200).send(dados);
     } catch (error) {
       return res.status(500).send({
-        message: 'Erro ao buscar administradores',
-        error: error.message
+        message: 'Erro ao buscar administradores'
       });
     }
   },
 
 async createadministrador(req, res) {
   try {
-    console.log("BODY:", req.body);
-
     const {
       matricula,
       nome,
       email,
       telefone,
       senha,
+      confirmacao_senha,
       cpf,
       posto_id,  
-    } = req.body;
+    } = req.body ?? {};
+
+    const erros = coletarErros(
+      validarObrigatorio(matricula, "a matrícula"),
+      validarNome(nome),
+      validarEmail(email),
+      validarTelefone(telefone),
+      validarCPF(cpf),
+      validarObrigatorio(posto_id, "a unidade de saúde"),
+      validarSenha(senha),
+      validarConfirmacaoSenha(senha, confirmacao_senha),
+    );
+    if (erros.length) {
+      return res.status(400).json({ sucesso: false, erros });
+    }
 
     const matriculaExiste = await knex('administrador')
-      .where('adm_matricula', matricula)
+      .where('adm_matricula', String(matricula).trim())
       .first();
     if (matriculaExiste) {
-      return res.status(400).json({ erro: 'Matrícula já cadastrada' });
+      return res.status(409).json({ erro: 'Matrícula já cadastrada' });
     }
 
     const emailExiste = await knex('administrador')
-      .where('adm_email', email)
+      .whereRaw('LOWER(adm_email) = ?', [normalizarEmail(email)])
       .first();
     if (emailExiste) {
-      return res.status(400).json({ erro: 'Email já cadastrado' });
+      return res.status(409).json({ erro: 'E-mail já cadastrado' });
+    }
+
+    const cpfExiste = await knex('administrador')
+      .whereRaw(...whereCpf('adm_cpf'), [somenteDigitos(cpf)])
+      .first();
+    if (cpfExiste) {
+      return res.status(409).json({ erro: 'CPF já cadastrado' });
     }
 
     if (posto_id) {
@@ -59,12 +83,12 @@ async createadministrador(req, res) {
     const hashSenha = await bcrypt.hash(senha, 10);
 
     const dadoscreate = {
-      adm_matricula: matricula,
-      adm_nome: nome,
-      adm_email: email,
-      adm_tel: telefone,
+      adm_matricula: String(matricula).trim(),
+      adm_nome: normalizarNome(nome),
+      adm_email: normalizarEmail(email),
+      adm_tel: formatarTelefone(telefone),
       adm_senha: hashSenha,
-      adm_cpf: cpf,
+      adm_cpf: formatarCPF(cpf),
       pos_id: posto_id,  
       tp_universal: false, 
     };
@@ -81,8 +105,7 @@ async createadministrador(req, res) {
   } catch (error) {
     console.error('Erro ao criar administrador:', error);
     return res.status(500).send({
-      message: 'Erro ao criar administrador',
-      error: error.message
+      erro: 'Erro ao criar administrador. Tente novamente.'
     });
   }
 },
@@ -98,6 +121,12 @@ async loginGeral(req, res) {
             });
         }
 
+        if (typeof email !== "string" || typeof senha !== "string" || validarEmail(email)) {
+            return res.status(400).json({ erro: "Informe um e-mail válido." });
+        }
+
+        const emailNormalizado = normalizarEmail(email);
+
         const secret = process.env.ACCESS_TOKEN_SECRET;
 
         if (!secret) {
@@ -107,41 +136,18 @@ async loginGeral(req, res) {
             });
         }
 const admin = await knex("administrador")
-    .where("adm_email", email)
+    .whereRaw("LOWER(adm_email) = ?", [emailNormalizado])
     .first();
 
 const autorizador = await knex("autorizador")
-    .where("aut_email", email)
+    .whereRaw("LOWER(aut_email) = ?", [emailNormalizado])
     .first();
 
 const paciente = await knex("pacientes")
-    .where("pac_email", email)
+    .whereRaw("LOWER(pac_email) = ?", [emailNormalizado])
     .first();
 
-console.log("EMAIL RECEBIDO:", email);
-
-console.log(
-    "ADMIN:",
-    admin ? admin.adm_email : "não encontrado"
-);
-
-console.log(
-    "AUTORIZADOR:",
-    autorizador ? autorizador.aut_email : "não encontrado"
-);
-
-console.log(
-    "PACIENTE:",
-    paciente ? paciente.pac_email : "não encontrado"
-);
-
-    
-
-
-
-
-       
-        // 1. TENTA LOGIN COMO ADMINISTRADOR
+// 1. TENTA LOGIN COMO ADMINISTRADOR
        
 
 
@@ -167,6 +173,7 @@ console.log(
                     }
                 );
 
+                registrarSucessoLogin(req);
                 return res.status(200).json({
                     msg: "Autenticação realizada com sucesso",
                     token,
@@ -213,6 +220,7 @@ console.log(
                     }
                 );
 
+                registrarSucessoLogin(req);
                 return res.status(200).json({
                     msg: "Autenticação realizada com sucesso",
                     token,
@@ -256,6 +264,7 @@ console.log(
                     }
                 );
 
+                registrarSucessoLogin(req);
                 return res.status(200).json({
                     msg: "Autenticação realizada com sucesso",
                     token,
@@ -283,8 +292,18 @@ console.log(
         // NENHUM USUÁRIO ENCONTRADO
         
 
+        const tentativasRestantes = registrarFalhaLogin(req);
+
+        if (tentativasRestantes === 0) {
+            return res.status(429).json({
+                erro: "Muitas tentativas de login. Seu acesso foi bloqueado por 15 minutos.",
+                tentar_novamente_em: 15 * 60
+            });
+        }
+
         return res.status(401).json({
-            msg: "E-mail ou senha inválidos"
+            msg: "E-mail ou senha inválidos",
+            tentativas_restantes: tentativasRestantes
         });
 
     } catch (error) {
@@ -292,54 +311,9 @@ console.log(
         console.error("ERRO NO LOGIN:", error);
 
         return res.status(500).json({
-            erro: error.message
+            erro: "Erro interno ao fazer login. Tente novamente."
         });
 
       
-      }},
-
-   async login(req, res) {
-    try {
-      const { email, senha } = req.body;
-
-      if (!email || !senha) {
-        return res.status(400).json({ erro: "E-mail e senha são obrigatórios" });
-      }
-
-      const secret = process.env.ACCESS_TOKEN_SECRET || 'sua_chave_secreta_fallback';
-
-      const admin = await knex("administrador").where({ adm_email: email }).first();
-      if (admin) {
-        const senhaValida = await bcrypt.compare(senha, admin.adm_senha);
-        if (senhaValida) {
-          const token = jsonwebtoken.sign(
-            { id: admin.adm_id, email: admin.adm_email, posto_id: admin.pos_id, tp_universal: admin.tp_universal ,tipo: 'ADMIN' },
-            secret,
-            { expiresIn: "7d" }
-          );
-        return res.status(200).json({
-          msg: "Autenticação realizada com sucesso",
-          token,
-          usuario: { id: admin.adm_id,
-            email: admin.adm_email,
-            nome: admin.adm_nome,
-            matricula: admin.adm_matricula,
-            telefone: admin.adm_tel,
-            cpf: admin.adm_cpf,
-            posto_id: admin.pos_id,          
-            tp_universal: admin.tp_universal 
-          },
-          tipo: "ADMIN"
-        });
-        }
-      }
-      // Se não encontrou usuário ou a senha estava errada
-      return res.status(401).json({ msg: "E-mail ou senha inválidos" });
-
-    } catch (erro) {
-      console.error("ERRO NO LOGIN:", erro);
-      return res.status(500).json({ erro: erro.message });
-    }
-  }
+      }}
 };
-

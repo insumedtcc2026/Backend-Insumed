@@ -9,9 +9,9 @@ export default{
 
             return res.json(postos);
         } catch (erro) {
-            console.log(erro);
+            console.error("Erro ao listar postos:", erro);
             return res.status(500).json({
-                erro: erro.message
+                erro: "Erro ao listar postos de coleta"
             });
         }
     },
@@ -22,7 +22,7 @@ export default{
 
             const postoid = await knex("postosdesaude")
                 .select("*")
-                .where("id", id) 
+                .where("pos_id", id)
                 .first();
             if (!postoid) {
                 return res.status(404).json({ 

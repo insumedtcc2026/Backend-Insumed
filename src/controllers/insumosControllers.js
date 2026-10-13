@@ -5,6 +5,7 @@ export default {
     try {
       const admin = req.session;
       const universal = Boolean(admin.tp_universal);
+      const busca = String(req.query.busca ?? "").trim();
 
       if (!busca) {
         return res.status(200).send([]);
@@ -31,7 +32,7 @@ export default {
     } catch (error) {
       return res
         .status(500)
-        .send({ message: "Erro ao buscar insumos", error: error.message });
+        .send({ message: "Erro ao buscar insumos" });
     }
   },
 
@@ -64,7 +65,7 @@ export default {
     } catch (error) {
       return res
         .status(500)
-        .send({ message: "Erro ao listar insumos", error: error.message });
+        .send({ message: "Erro ao listar insumos" });
     }
   },
 
@@ -116,7 +117,7 @@ export default {
     });
 
   } catch (error) {
-    return res.status(500).send({ message: 'Erro ao movimentar insumo', error: error.message });
+    return res.status(500).send({ message: 'Erro ao movimentar insumo' });
   }
 },
 
@@ -187,7 +188,7 @@ export default {
     } catch (error) {
       return res
         .status(500)
-        .send({ message: "Erro ao criar insumo", error: error.message });
+        .send({ message: "Erro ao criar insumo" });
     }
   },
 

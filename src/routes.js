@@ -12,24 +12,36 @@ import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
 import autorizadorControllers from "./controllers/autorizadorControllers.js";
 import autorizarAut from "./middleware/autorizarAut.js";
 import autorizarVisualizacaoPrescricao from "./middleware/autorizarVisualizacaoPrescricao.js";
+import { limiteLogin } from "./middleware/limiteLogin.js";
+import autorizarPaciente from "./middleware/autorizarPaciente.js";
+import { idValido } from "./utils/validacoes.js";
 
 
 const routes = express.Router();
 
+// Todo ":id" das rotas precisa ser um número inteiro positivo; sem isso,
+// "/solicitacao/abc" chegava ao banco e virava erro 500.
+routes.param('id', (req, res, next, id) => {
+    if (!idValido(id)) {
+        return res.status(400).json({ error: 'Identificador inválido.' });
+    }
+    return next();
+});
+
 routes.get('/', raizControllers.index);
 
 // Rotas do paciente
-routes.get('/pacientesall', pacientesControllers.pacientesall);
+routes.get('/pacientesall', authorization, autorizarAdmin, pacientesControllers.pacientesall);
 
 // Rota post do paciente
 routes.post('/pacientes', pacientesControllers.createpaciente);
 
 routes.get('/pacientes', authorization, autorizarAdmin, pacientesControllers.buscarPorCpf);
 routes.put(
-    "/pacientes/perfil", authorization, pacientesControllers.atualizarPerfil
+    "/pacientes/perfil", authorization, autorizarPaciente, pacientesControllers.atualizarPerfil
 );
 
-routes.post('/login',administradorControllers.loginGeral)
+routes.post('/login', limiteLogin, administradorControllers.loginGeral)
 
 //Rota de Validação de Token
 routes.get('/validar', authorization, (req, res)=>{
@@ -44,7 +56,7 @@ routes.get('/postos' , postocoleta.listar)
 
 //rotas administrador
 
-routes.get('/administradorall', administradorControllers.administradorall);
+routes.get('/administradorall', authorization, autorizarAdmin, administradorControllers.administradorall);
 
 routes.post('/administrador', administradorControllers.createadministrador);
 
@@ -99,7 +111,7 @@ routes.post('/insumos', authorization, autorizarAdmin, insumosControllers.criarI
 
 
 //rotas solicitaçao
-routes.post('/solicitacoes',authorization,solicitacaoControllers.createSolicitacao);
+routes.post('/solicitacoes', authorization, autorizarPaciente, solicitacaoControllers.createSolicitacao);
 
 routes.get('/pendentes',authorization,autorizarAdmin,solicitacaoControllers.buscarprescricoespendetes);
 
@@ -109,11 +121,11 @@ routes.get(
     solicitacaoControllers.buscarPrescricao
   );
 
-routes.get("/solicitacao/pacienteid", authorization, solicitacaoControllers.prescicaodopaciente);
+routes.get("/solicitacao/pacienteid", authorization, autorizarPaciente, solicitacaoControllers.prescicaodopaciente);
 
 
 routes.get(
-  "/solicitacao/:id/detalhes",authorization,solicitacaoControllers.detalhesPrescricaoPaciente
+  "/solicitacao/:id/detalhes", authorization, autorizarPaciente, solicitacaoControllers.detalhesPrescricaoPaciente
 );
 
 

@@ -1,4 +1,14 @@
 import knex from './../database/index.js';
+import { dataHojeBrasil, idValido, validarDataISO } from '../utils/validacoes.js';
+
+// Mesmo limite do formulário de envio (EnviarSolicitacao.tsx)
+const TAMANHO_MAX_PRESCRICAO = 5 * 1024 * 1024;
+const TAMANHO_MAX_OBSERVACAO = 1000;
+const REGEX_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+// O formulário aceita "image/*,.pdf"
+const tipoPrescricaoPermitido = (tipo) =>
+    typeof tipo === 'string' && (/^image\/[a-z0-9.+-]+$/i.test(tipo) || tipo === 'application/pdf');
 
 export default {
 
@@ -21,20 +31,68 @@ export default {
             return res.status(400).json({ error: 'Posto de saúde não informado' });
         }
 
+        if (!idValido(pos_id)) {
+            return res.status(400).json({ error: 'Posto de saúde inválido' });
+        }
+
         if (!sol_prescricao) {
             return res.status(400).json({ error: 'Prescrição não fornecida' });
         }
 
+        if (typeof sol_prescricao !== 'string' || !REGEX_BASE64.test(sol_prescricao)) {
+            return res.status(400).json({ error: 'Arquivo da prescrição inválido. Envie novamente.' });
+        }
+
+        if (sol_prescricao_tipo && !tipoPrescricaoPermitido(sol_prescricao_tipo)) {
+            return res.status(400).json({ error: 'Formato não suportado. Envie uma imagem ou um PDF.' });
+        }
+
+        if (sol_observacao != null && typeof sol_observacao !== 'string') {
+            return res.status(400).json({ error: 'Observação inválida' });
+        }
+
+        if (sol_observacao && sol_observacao.trim().length > TAMANHO_MAX_OBSERVACAO) {
+            return res.status(400).json({
+                error: `A observação deve ter no máximo ${TAMANHO_MAX_OBSERVACAO} caracteres`
+            });
+        }
+
         const imagemBuffer = Buffer.from(sol_prescricao, 'base64');
+
+        if (!imagemBuffer.length) {
+            return res.status(400).json({ error: 'Arquivo da prescrição vazio' });
+        }
+
+        if (imagemBuffer.length > TAMANHO_MAX_PRESCRICAO) {
+            return res.status(400).json({ error: 'A prescrição deve ter no máximo 5 MB.' });
+        }
+
+        const posto = await knex('postosdesaude').where('pos_id', Number(pos_id)).first('pos_id');
+        if (!posto) {
+            return res.status(400).json({ error: 'Posto de saúde não encontrado' });
+        }
+
+        // Evita a mesma prescrição pendente duas vezes (duplo clique,
+        // reenvio do formulário): mesmo paciente, mesmo arquivo, ainda Pendente.
+        const duplicada = await knex('solicitacao')
+            .where({ pac_id, sol_status: 'Pendente' })
+            .where('sol_prescricao', imagemBuffer)
+            .first('sol_id');
+
+        if (duplicada) {
+            return res.status(409).json({
+                error: 'Esta prescrição já foi enviada e está aguardando análise.'
+            });
+        }
 
         const [solicitacao] =
             await knex('solicitacao')
                 .insert({
                     pac_id: pac_id,
-                    pos_id: pos_id,
+                    pos_id: Number(pos_id),
                     sol_prescricao: imagemBuffer,
                     sol_prescricao_tipo: sol_prescricao_tipo || null,
-                    sol_observacao: sol_observacao || null,
+                    sol_observacao: sol_observacao?.trim() || null,
                     sol_status: 'Pendente',
                     sol_insumo_quant: 0
                 })
@@ -54,7 +112,7 @@ export default {
 
     } catch (error) {
         console.error('Erro ao criar solicitação:', error);
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: "Erro ao processar a solicitação. Tente novamente." });
     }
 },
 
@@ -77,7 +135,20 @@ async buscarprescricoespendetes(req, res) {
                 "sol.sol_data_solicitacao",
                 "pac.pac_nome",
                 "pac.pac_cpf",
-                "pac.pac_avatar"
+                "pac.pac_avatar",
+                // prescrição autorizada que já virou agendamento (agendado ou
+                // concluído): a tela troca "Agendar" por "Ver agendamento"
+                knex.raw("(ag.sol_origem_id IS NOT NULL) AS agendamento_ativo")
+            )
+            .leftJoin(
+                knex("solicitacao")
+                    .select("sol_origem_id")
+                    .whereNotNull("sol_origem_id")
+                    .whereIn("sol_status", ["agendado", "concluido"])
+                    .groupBy("sol_origem_id")
+                    .as("ag"),
+                "ag.sol_origem_id",
+                "sol.sol_id"
             )
             .whereIn("sol.sol_status", [
                 "Pendente",
@@ -104,10 +175,6 @@ async buscarprescricoespendetes(req, res) {
 
         const solicitacoes = await query;
 
-        console.log(
-            "SOLICITAÇÕES DO ADMIN:",
-            solicitacoes
-        );
 
 
         return res.status(200).json(
@@ -123,7 +190,7 @@ async buscarprescricoespendetes(req, res) {
         );
 
         return res.status(500).json({
-            error: error.message
+            error: "Erro ao processar a solicitação. Tente novamente."
         });
 
     }
@@ -199,7 +266,7 @@ async buscarPrescricao(req, res) {
     return res.status(200).json(buscapac);
   } catch (error) {
     console.error("Erro ao buscar prescrições", error);
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: "Erro ao processar a solicitação. Tente novamente." });
   }
 },
 
@@ -242,9 +309,15 @@ async detalhesPrescricaoPaciente(req, res) {
 
   } catch (error) {
     console.error("Erro ao buscar detalhes da prescrição:", error);
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: "Erro ao processar a solicitação. Tente novamente." });
   }
 },
+// REVISÃO PELO ADMINISTRADOR
+//
+// O único status que o administrador grava por esta rota é "Revisado"
+// (envio para o autorizador, com insumo, quantidade e vencimento). Quem
+// decide "Autorizado"/"Nao Autorizado" é o autorizador, na rota dele, e o
+// reenvio tem rota própria. Só prescrições "Pendente" podem ser revisadas.
 async alterarStatus(req, res) {
     try {
         const { id } = req.params;
@@ -254,7 +327,7 @@ async alterarStatus(req, res) {
             sol_data_vencimento,
             ins_id,
             sol_insumo_quant
-        } = req.body;
+        } = req.body ?? {};
 
         if (!sol_status) {
             return res.status(400).json({
@@ -262,52 +335,89 @@ async alterarStatus(req, res) {
             });
         }
 
-        // Quando o administrador enviar para o autorizador,
-        // é obrigatório informar o insumo e a quantidade.
-        if (sol_status === "Revisado") {
-
-            if (!ins_id) {
-                return res.status(400).json({
-                    error: "Insumo não informado"
-                });
-            }
-
-            if (!sol_insumo_quant || Number(sol_insumo_quant) <= 0) {
-                return res.status(400).json({
-                    error: "Quantidade de insumo inválida"
-                });
-            }
+        if (sol_status !== "Revisado") {
+            return res.status(400).json({
+                error: "Status inválido. O administrador só pode enviar a prescrição para o autorizador."
+            });
         }
 
-        const dadosAtualizacao = {
-            sol_status,
-            sol_data_vencimento
-        };
-
-        // Só altera insumo e quantidade quando estiver enviando
-        // para o autorizador.
-        if (sol_status === "Revisado") {
-            dadosAtualizacao.ins_id = Number(ins_id);
-            dadosAtualizacao.sol_insumo_quant = Number(sol_insumo_quant);
+        if (!ins_id) {
+            return res.status(400).json({
+                error: "Insumo não informado"
+            });
         }
 
+        if (!idValido(ins_id)) {
+            return res.status(400).json({
+                error: "Insumo inválido"
+            });
+        }
+
+        const quantidade = Number(sol_insumo_quant);
+
+        if (!Number.isInteger(quantidade) || quantidade <= 0) {
+            return res.status(400).json({
+                error: "Quantidade de insumo inválida"
+            });
+        }
+
+        if (!sol_data_vencimento) {
+            return res.status(400).json({
+                error: "Informe a data de vencimento da prescrição"
+            });
+        }
+
+        if (validarDataISO(sol_data_vencimento)) {
+            return res.status(400).json({
+                error: "Data de vencimento inválida"
+            });
+        }
+
+        if (sol_data_vencimento < dataHojeBrasil()) {
+            return res.status(400).json({
+                error: "A prescrição está vencida. Use \"Pedir reenvio\" com o motivo Prescrição vencida."
+            });
+        }
+
+        const insumo = await knex("insumo").where("ins_id", Number(ins_id)).first("ins_id");
+
+        if (!insumo) {
+            return res.status(404).json({
+                error: "Insumo não encontrado"
+            });
+        }
+
+        // UPDATE condicional: só sai de "Pendente". Duas revisões
+        // simultâneas não sobrescrevem uma à outra.
         const quantidadeAtualizada = await knex("solicitacao")
             .where("sol_id", id)
-            .update(dadosAtualizacao);
+            .where("sol_status", "Pendente")
+            .update({
+                sol_status,
+                sol_data_vencimento,
+                ins_id: Number(ins_id),
+                sol_insumo_quant: quantidade
+            });
 
         if (!quantidadeAtualizada) {
-            return res.status(404).json({
-                error: "Solicitação não encontrada"
+            const existe = await knex("solicitacao").where("sol_id", id).first("sol_status");
+
+            if (!existe) {
+                return res.status(404).json({
+                    error: "Solicitação não encontrada"
+                });
+            }
+
+            return res.status(409).json({
+                error: "Esta prescrição já foi analisada e não pode ser revisada novamente."
             });
         }
 
         return res.status(200).json({
             message: "Solicitação atualizada com sucesso",
             sol_status,
-            ins_id: ins_id || null,
-            quantidade: sol_insumo_quant
-                ? Number(sol_insumo_quant)
-                : null
+            ins_id: Number(ins_id),
+            quantidade
         });
 
     } catch (error) {
@@ -317,7 +427,7 @@ async alterarStatus(req, res) {
         );
 
         return res.status(500).json({
-            error: error.message
+            error: "Erro ao atualizar a solicitação"
         });
     }
 },
@@ -431,7 +541,7 @@ async buscarHistoricoPrescricoes(req, res) {
         );
 
         return res.status(500).json({
-            error: error.message
+            error: "Erro ao processar a solicitação. Tente novamente."
         });
 
 
@@ -445,7 +555,7 @@ async pedirReenvio(req, res) {
   try {
 
     const { id } = req.params;
-    const { motivo } = req.body;
+    const { motivo } = req.body ?? {};
 
     if (!motivo) {
       return res.status(400).json({
@@ -466,8 +576,10 @@ async pedirReenvio(req, res) {
       });
     }
 
+    // Só prescrições ainda não analisadas (Pendente) podem voltar para o paciente.
     const [solicitacao] = await knex("solicitacao")
       .where("sol_id", id)
+      .where("sol_status", "Pendente")
       .update({
         sol_status: "Reenvio",
         sol_motivo_reenvio: motivo
@@ -479,8 +591,16 @@ async pedirReenvio(req, res) {
       ]);
 
     if (!solicitacao) {
-      return res.status(404).json({
-        error: "Solicitação não encontrada"
+      const existe = await knex("solicitacao").where("sol_id", id).first("sol_status");
+
+      if (!existe) {
+        return res.status(404).json({
+          error: "Solicitação não encontrada"
+        });
+      }
+
+      return res.status(409).json({
+        error: "Esta prescrição já foi analisada e não pode mais receber pedido de reenvio."
       });
     }
 
@@ -497,12 +617,8 @@ async pedirReenvio(req, res) {
     );
 
     return res.status(500).json({
-      error: error.message
+      error: "Erro ao pedir reenvio"
     });
   }
-
-     
-
-  
 },
 };
