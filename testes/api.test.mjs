@@ -488,3 +488,26 @@ test('F6 /pendentes indica se a prescrição autorizada já tem agendamento ativ
   assert.ok(autorizada, 'prescrição autorizada aparece na lista');
   assert.equal(autorizada.agendamento_ativo, true, 'sol1 tem agendamento concluído (ag2)');
 });
+
+test('F7 gênero e cor/raça são opcionais no cadastro do paciente', async () => {
+  const base = {
+    nome: 'Helena Costa', telefone: '24991234500', cpf: '935.411.347-80',
+    senha: 'Senha@123', confirmacao_senha: 'Senha@123', cep: '27000000',
+    data_nasc: '1990-05-10', endereco: 'Rua B, 20',
+  };
+  const semCampos = await request(app).post('/pacientes').send({ ...base, email: 'helena@teste.com' });
+  assert.equal(semCampos.status, 201, JSON.stringify(semCampos.body));
+  const salvo = await knex('pacientes').where('pac_email', 'helena@teste.com').first();
+  assert.equal(salvo.pac_sexo, 'N');
+  assert.equal(salvo.pac_raca, 'Não informado');
+
+  const generoInvalido = await request(app).post('/pacientes').send({ ...base, email: 'h2@teste.com', cpf: '864.464.227-84', sexo: 'xyz' });
+  assert.equal(generoInvalido.status, 400);
+  assert.ok(generoInvalido.body.erros.includes('Selecione um gênero válido.'));
+
+  const preenchido = await request(app).post('/pacientes').send({ ...base, email: 'h3@teste.com', cpf: '864.464.227-84', sexo: 'Feminino', raca: 'Parda' });
+  assert.equal(preenchido.status, 201, JSON.stringify(preenchido.body));
+  const salvo3 = await knex('pacientes').where('pac_email', 'h3@teste.com').first();
+  assert.equal(salvo3.pac_sexo, 'F');
+  assert.equal(salvo3.pac_raca, 'Parda');
+});

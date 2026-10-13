@@ -6,6 +6,8 @@ import {
   validarEmail, validarNome, validarObrigatorio, validarSenha, validarTelefone, whereCpf,
 } from '../utils/validacoes.js';
 
+const RACA_NAO_INFORMADA = "Não informado";
+
 // Nunca devolver o hash da senha nas respostas da API.
 const semSenha = ({ pac_senha, ...resto }) => resto;
 
@@ -43,7 +45,13 @@ export default {
         "outro": "O",
         "prefiro não responder": "N",
       };
-      const sexoFormatado = sexos[String(sexo ?? "").trim().toLowerCase()];
+      // Gênero e cor/raça são opcionais. Vazio vira "não informado" (em vez
+      // de NULL, para não depender de a coluna aceitar nulo); se vier
+      // preenchido, precisa ser um valor válido.
+      const sexoInformado = String(sexo ?? "").trim();
+      const sexoFormatado = sexoInformado ? sexos[sexoInformado.toLowerCase()] : "N";
+      const racaInformada = typeof raca === "string" ? raca.trim() : "";
+      const racaFinal = racaInformada || RACA_NAO_INFORMADA;
 
       // Valida todos os campos de uma vez para devolver todos os erros juntos.
       const erros = coletarErros(
@@ -53,7 +61,7 @@ export default {
         validarCPF(cpf),
         validarDataNascimento(data_nasc),
         sexoFormatado ? null : "Selecione um gênero válido.",
-        validarObrigatorio(raca, "a cor/raça"),
+        racaInformada.length > 30 ? "Cor/raça inválida." : null,
         validarCEP(cep),
         String(endereco ?? "").trim().length >= 5 ? null : "Informe o endereço completo.",
         validarSenha(senha),
@@ -97,7 +105,7 @@ export default {
         pac_data_nasc: data_nasc,
         pac_sexo: sexoFormatado,
         pac_endereco: String(endereco).trim(),
-        pac_raca: raca,
+        pac_raca: racaFinal,
         pac_cep: formatarCEP(cep),
         pac_avatar
       });
