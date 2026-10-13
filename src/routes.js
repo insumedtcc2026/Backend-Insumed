@@ -50,7 +50,7 @@ routes.post('/administrador', administradorControllers.createadministrador);
 
 //rotas autorizador
 routes.get('/autorizadorall',authorization,autorizarAut, autorizadorControllers.autorizadorrall);
-routes.post('/autorizador', authorization, autorizarAut, autorizadorControllers.createautorizador);
+routes.post('/autorizador',  autorizadorControllers.createautorizador);
 routes.get('/prescricao/aprovadas',authorization,autorizarAut, autorizadorControllers.buscarPrescricoesAprovadas);
 
 routes.get(
