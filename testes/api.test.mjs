@@ -22,7 +22,7 @@ const db = newDb();
 // pg-mem não traz REPLACE(); o Postgres/Neon tem nativamente
 db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], returns: 'text', implementation: (a, b, c) => a == null ? null : a.split(b).join(c) });
 db.public.none(`
-  create table postosdesaude (pos_id serial primary key, pos_nome text);
+  create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
   create table pacientes (pac_id serial primary key, pac_nome text, pac_email text, pac_senha text, pac_cpf text,
     pac_telefone text, pac_cep text, pac_data_nasc date, pac_endereco text, pac_sexo text, pac_raca text, pac_avatar text);
   create table administrador (adm_id serial primary key, adm_matricula text, adm_nome text, adm_email text, adm_tel text,
@@ -510,4 +510,81 @@ test('F7 gênero e cor/raça são opcionais no cadastro do paciente', async () =
   const salvo3 = await knex('pacientes').where('pac_email', 'h3@teste.com').first();
   assert.equal(salvo3.pac_sexo, 'F');
   assert.equal(salvo3.pac_raca, 'Parda');
+});
+
+// ------------------------------------------------------------------
+// Fase 2 — perfil, painel do admin, datas sugeridas, ficha do paciente
+// ------------------------------------------------------------------
+test('G1 perfil do admin traz o posto; do autorizador não; paciente não acessa', async () => {
+  const adm = await request(app).get('/perfil').set(auth(tk.adm));
+  assert.equal(adm.status, 200);
+  assert.equal(adm.body.tipo, 'ADMIN');
+  assert.equal(adm.body.posto.pos_nome, 'Posto Centro');
+  assert.ok(!('adm_senha' in adm.body) && !('senha' in adm.body));
+  const aut = await request(app).get('/perfil').set(auth(tk.aut));
+  assert.equal(aut.body.tipo, 'AUTORIZADOR');
+  assert.equal(aut.body.posto, undefined);
+  assert.equal((await request(app).get('/perfil').set(auth(tk.pacA))).status, 403);
+  assert.equal((await request(app).get('/perfil')).status, 401);
+});
+
+test('G2 editar o próprio perfil valida e não aceita e-mail de outro usuário', async () => {
+  const ruim = await request(app).put('/perfil').set(auth(tk.adm)).send({ nome: 'A', email: 'x', telefone: '1' });
+  assert.equal(ruim.status, 400);
+  assert.equal(ruim.body.erros.length, 3);
+  const dup = await request(app).put('/perfil').set(auth(tk.adm)).send({ nome: 'Admin Geral', email: 'norte@teste.com', telefone: '24999990000' });
+  assert.equal(dup.status, 409);
+  const ok = await request(app).put('/perfil').set(auth(tk.adm)).send({ nome: 'Admin  Geral', email: 'ADM@teste.com', telefone: '24999990000' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.perfil.telefone, '(24) 99999-0000');
+  assert.equal(ok.body.perfil.email, 'adm@teste.com');
+  assert.equal(ok.body.perfil.nome, 'Admin Geral');
+});
+
+test('G3 painel do admin conta a fila de trabalho do posto', async () => {
+  const r = await request(app).get('/painel/admin').set(auth(tk.adm));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  for (const k of ['pendentes', 'autorizadasSemAgendamento', 'coletasHoje', 'estoqueBaixo']) {
+    assert.equal(typeof r.body[k], 'number', k);
+  }
+  const antes = r.body.autorizadasSemAgendamento;
+  // uma prescrição autorizada sem agendamento conta; com agendamento ativo, não
+  const [nova] = await knex('solicitacao').insert({ pac_id: ids.pacA, pos_id: ids.posto1, sol_status: 'Autorizado', sol_insumo_quant: 1 }).returning('sol_id');
+  assert.equal((await request(app).get('/painel/admin').set(auth(tk.adm))).body.autorizadasSemAgendamento, antes + 1);
+  await request(app).post('/agendamentos').set(auth(tk.adm)).send({ ...novoAg(), sol_origem_id: nova.sol_id }).expect(201);
+  assert.equal((await request(app).get('/painel/admin').set(auth(tk.adm))).body.autorizadasSemAgendamento, antes);
+  // admin de outro posto não vê a fila deste
+  const norte = await request(app).get('/painel/admin').set(auth(tk.admNorte));
+  assert.equal(norte.body.autorizadasSemAgendamento, 0);
+  assert.equal((await request(app).get('/painel/admin').set(auth(tk.aut))).status, 403);
+});
+
+test('G4 datas sugeridas: só dias úteis, futuros, e as com menos coletas', async () => {
+  assert.equal((await request(app).get('/agendamentos/datas-sugeridas').set(auth(tk.adm))).status, 400);
+  const r = await request(app).get('/agendamentos/datas-sugeridas').query({ pos_id: ids.posto1 }).set(auth(tk.adm));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.datas.length, 14);
+  for (const d of r.body.datas) {
+    assert.ok(d.data > hoje, 'só datas futuras');
+    const dia = new Date(d.data + 'T12:00:00Z').getUTCDay();
+    assert.ok(dia !== 0 && dia !== 6, 'sem fim de semana');
+  }
+  assert.equal(r.body.sugeridas.length, 3);
+  const cheio = r.body.datas.find((d) => d.agendados > 0);
+  if (cheio) assert.ok(!r.body.sugeridas.includes(cheio.data), 'dia com coleta não é sugerido antes de dias vazios');
+});
+
+test('G5 ficha do paciente para o admin; busca por nome', async () => {
+  const r = await request(app).get(`/pacientes/${ids.pacA}/resumo`).set(auth(tk.adm));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.paciente.pac_nome, 'Ana Souza');
+  assert.ok(!('pac_senha' in r.body.paciente));
+  assert.ok(r.body.prescricoes.length >= 1 && r.body.prescricoes.every((p) => !['agendado', 'concluido', 'cancelado'].includes(p.sol_status)));
+  assert.ok(r.body.agendamentos.length >= 1 && r.body.agendamentos.every((a) => Array.isArray(a.insumos)));
+  assert.ok(r.body.agendamentos.some((a) => a.sol_motivo_cancelamento === 'Paciente pediu para remarcar'));
+  assert.equal((await request(app).get(`/pacientes/${ids.pacA}/resumo`).set(auth(tk.pacA))).status, 403);
+  assert.equal((await request(app).get('/pacientes/99999/resumo').set(auth(tk.adm))).status, 404);
+  const porNome = await request(app).get('/pacientes').query({ busca: 'bruno' }).set(auth(tk.adm));
+  assert.equal(porNome.body[0].pac_nome, 'Bruno Lima');
+  assert.deepEqual((await request(app).get('/pacientes').query({ busca: '' }).set(auth(tk.adm))).body, []);
 });

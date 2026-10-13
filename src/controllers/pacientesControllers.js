@@ -218,20 +218,77 @@ export default {
 },
   
 
-  async buscarPorCpf (req, res) {
-try {
-const { cpf } = req.query;
-if (!cpf) return res.status(200).send([]);
-const termoLimpo = cpf.replace(/\D/g, '');
-const pacientes = await knex('pacientes')
-.whereRaw("REPLACE(REPLACE(REPLACE(pac_cpf, '.', ''), '-', ''), ' ', '') LIKE ?", [`%${termoLimpo}%`])
-.select('pac_id', 'pac_nome', 'pac_cpf', 'pac_telefone').limit(10);
-return res.status(200).send(pacientes);
-} catch (error) {
-return res.status(500).send({ message: 'Erro ao buscar pacientes' });
-}
+  // Busca de pacientes para o admin: por CPF (com ou sem pontuação) ou por
+  // nome. Aceita ?cpf= (formato antigo) ou ?busca=.
+  async buscarPorCpf(req, res) {
+    try {
+      const termo = String(req.query.busca ?? req.query.cpf ?? '').trim();
+      const digitos = termo.replace(/\D/g, '');
+      const temLetras = /[A-Za-zÀ-ÿ]/.test(termo);
 
+      if (!digitos && !temLetras) return res.status(200).send([]);
+      if (temLetras && termo.length < 2) return res.status(200).send([]);
 
+      const consulta = knex('pacientes').select('pac_id', 'pac_nome', 'pac_cpf', 'pac_telefone');
+      if (temLetras) {
+        consulta.whereILike('pac_nome', `%${termo}%`).orderBy('pac_nome');
+      } else {
+        consulta.whereRaw("REPLACE(REPLACE(REPLACE(pac_cpf, '.', ''), '-', ''), ' ', '') LIKE ?", [`%${digitos}%`]);
+      }
 
-}
+      return res.status(200).send(await consulta.limit(10));
+    } catch (error) {
+      console.error('Erro ao buscar pacientes:', error);
+      return res.status(500).send({ message: 'Erro ao buscar pacientes' });
+    }
+  },
+
+  // FICHA DO PACIENTE (visão do admin): dados cadastrais, prescrições e
+  // agendamentos, para atender sem precisar abrir várias telas.
+  async resumoPaciente(req, res) {
+    try {
+      const { id } = req.params;
+
+      const paciente = await knex('pacientes').where('pac_id', id).first();
+      if (!paciente) return res.status(404).send({ message: 'Paciente não encontrado' });
+
+      const solicitacoes = await knex('solicitacao as sol')
+        .leftJoin('postosdesaude as pos', 'pos.pos_id', 'sol.pos_id')
+        .leftJoin('insumo as ins', 'ins.ins_id', 'sol.ins_id')
+        .where('sol.pac_id', id)
+        .select(
+          'sol.sol_id', 'sol.sol_status', 'sol.sol_protocolo', 'sol.sol_data_solicitacao',
+          'sol.sol_data_de_coleta', 'sol.sol_data_vencimento', 'sol.sol_insumo_quant',
+          'sol.sol_motivo_nao_autorizado', 'sol.sol_motivo_reenvio', 'sol.sol_motivo_cancelamento',
+          'sol.sol_origem_id', 'sol.pos_id', 'pos.pos_nome', 'ins.ins_nome',
+          knex.raw('(sol.sol_prescricao IS NOT NULL) AS tem_prescricao'),
+        )
+        .orderBy('sol.sol_id', 'desc');
+
+      const ehAgendamento = (s) => ['agendado', 'concluido', 'cancelado'].includes(s.sol_status);
+
+      // insumos de cada agendamento
+      const idsAgendamento = solicitacoes.filter(ehAgendamento).map((s) => s.sol_id);
+      const itens = idsAgendamento.length
+        ? await knex('coleta as col')
+          .leftJoin('insumo as ins', 'ins.ins_id', 'col.ins_id')
+          .whereIn('col.sol_id', idsAgendamento)
+          .select('col.sol_id', 'ins.ins_nome', 'col.quantidade')
+        : [];
+
+      const agendamentos = solicitacoes.filter(ehAgendamento).map((a) => ({
+        ...a,
+        insumos: itens.filter((i) => i.sol_id === a.sol_id).map(({ ins_nome, quantidade }) => ({ ins_nome, quantidade })),
+      }));
+
+      return res.status(200).send({
+        paciente: semSenha(paciente),
+        prescricoes: solicitacoes.filter((s) => !ehAgendamento(s)),
+        agendamentos,
+      });
+    } catch (error) {
+      console.error('Erro ao montar ficha do paciente:', error);
+      return res.status(500).send({ message: 'Erro ao buscar dados do paciente' });
+    }
+  },
 };

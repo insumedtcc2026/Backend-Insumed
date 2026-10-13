@@ -10,6 +10,7 @@ import agendamentosControllers from "./controllers/agendamentosControllers.js";
 import insumosControllers from "./controllers/insumosControllers.js";
 import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
 import autorizadorControllers from "./controllers/autorizadorControllers.js";
+import painelControllers from "./controllers/painelControllers.js";
 import autorizarAut from "./middleware/autorizarAut.js";
 import autorizarVisualizacaoPrescricao from "./middleware/autorizarVisualizacaoPrescricao.js";
 import { limiteLogin } from "./middleware/limiteLogin.js";
@@ -40,6 +41,19 @@ routes.get('/pacientes', authorization, autorizarAdmin, pacientesControllers.bus
 routes.put(
     "/pacientes/perfil", authorization, autorizarPaciente, pacientesControllers.atualizarPerfil
 );
+// ficha completa do paciente (dados, prescrições e agendamentos) para o admin
+routes.get('/pacientes/:id/resumo', authorization, autorizarAdmin, pacientesControllers.resumoPaciente);
+
+// Perfil pessoal do admin e do autorizador
+const autorizarAdminOuAut = (req, res, next) =>
+    ['ADMIN', 'AUTORIZADOR'].includes(req.session?.tipo)
+        ? next()
+        : res.status(403).json({ error: 'Acesso restrito a administradores e autorizadores' });
+routes.get('/perfil', authorization, autorizarAdminOuAut, painelControllers.meuPerfil);
+routes.put('/perfil', authorization, autorizarAdminOuAut, painelControllers.atualizarMeuPerfil);
+
+// Home do admin (fila de trabalho)
+routes.get('/painel/admin', authorization, autorizarAdmin, painelControllers.painelAdmin);
 
 routes.post('/login', limiteLogin, administradorControllers.loginGeral)
 
@@ -91,6 +105,7 @@ routes.patch(
 
 //agendamento
 routes.get('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.listar);
+routes.get('/agendamentos/datas-sugeridas', authorization, autorizarAdmin, painelControllers.datasSugeridas);
 routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.criar);
 
 routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, 
