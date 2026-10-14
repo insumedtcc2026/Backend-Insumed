@@ -33,8 +33,7 @@ async function validarAcessoSolicitacao(req, res, next) {
     } catch (erro) {
         console.error('Erro em validarAcessoSolicitacao:', erro);
         return res.status(500).json({
-            erro: 'Erro ao validar acesso',
-            message: erro.message
+            erro: 'Erro ao validar acesso'
         });
     }
 }

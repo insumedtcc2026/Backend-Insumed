@@ -1,15 +1,24 @@
 import knex from '../database/index.js';
 import bcrypt from 'bcrypt';
-import jsonwebtoken from 'jsonwebtoken';
+import {
+  coletarErros, formatarCEP, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome,
+  somenteDigitos, validarCEP, validarConfirmacaoSenha, validarCPF, validarDataNascimento,
+  validarEmail, validarNome, validarObrigatorio, validarSenha, validarTelefone, whereCpf,
+} from '../utils/validacoes.js';
+
+const RACA_NAO_INFORMADA = "Não informado";
+
+// Nunca devolver o hash da senha nas respostas da API.
+const semSenha = ({ pac_senha, ...resto }) => resto;
 
 export default {
   // Busca todos os dados da tabela pacientes
   async pacientesall(req, res) {
     try {
-      const pacientes = await knex('pacientes');
+      const pacientes = (await knex('pacientes')).map(semSenha);
       return res.status(200).send(pacientes);
     } catch (error) {
-      return res.status(500).send({ message: 'Erro ao buscar pacientes', error: error.message });
+      return res.status(500).send({ message: 'Erro ao buscar pacientes' });
     }
   },
 
@@ -26,211 +35,86 @@ export default {
         endereco,
         raca,
         senha,
+        confirmacao_senha,
         cep,
-        
-      } = req.body;
+      } = req.body ?? {};
 
+      const sexos = {
+        "masculino": "M",
+        "feminino": "F",
+        "outro": "O",
+        "prefiro não responder": "N",
+      };
+      // Gênero e cor/raça são opcionais. Vazio vira "não informado" (em vez
+      // de NULL, para não depender de a coluna aceitar nulo); se vier
+      // preenchido, precisa ser um valor válido.
+      const sexoInformado = String(sexo ?? "").trim();
+      const sexoFormatado = sexoInformado ? sexos[sexoInformado.toLowerCase()] : "N";
+      const racaInformada = typeof raca === "string" ? raca.trim() : "";
+      const racaFinal = racaInformada || RACA_NAO_INFORMADA;
 
-    // GERAÇÃO AUTOMÁTICA DO AVATAR
+      // Valida todos os campos de uma vez para devolver todos os erros juntos.
+      const erros = coletarErros(
+        validarNome(nome),
+        validarEmail(email),
+        validarTelefone(telefone),
+        validarCPF(cpf),
+        validarDataNascimento(data_nasc),
+        sexoFormatado ? null : "Selecione um gênero válido.",
+        racaInformada.length > 30 ? "Cor/raça inválida." : null,
+        validarCEP(cep),
+        String(endereco ?? "").trim().length >= 5 ? null : "Informe o endereço completo.",
+        validarSenha(senha),
+        validarConfirmacaoSenha(senha, confirmacao_senha),
+      );
 
-    const nomeLimpo = (nome || "").trim();
+      if (erros.length) {
+        return res.status(400).json({ sucesso: false, erros });
+      }
 
-    const partesNome = nomeLimpo.split(/\s+/);
+      const emailNormalizado = normalizarEmail(email);
 
-    let pac_avatar;
+      const emailExistente = await knex('pacientes')
+        .whereRaw('LOWER(pac_email) = ?', [emailNormalizado])
+        .first();
+      if (emailExistente) {
+        return res.status(409).json({ sucesso: false, erros: ["E-mail já cadastrado."] });
+      }
 
-    if (partesNome.length >= 2) {
+      const cpfExistente = await knex('pacientes')
+        .whereRaw(...whereCpf('pac_cpf'), [somenteDigitos(cpf)])
+        .first();
+      if (cpfExistente) {
+        return res.status(409).json({ sucesso: false, erros: ["CPF já cadastrado."] });
+      }
 
-      pac_avatar =
+      // Geração automática do avatar (iniciais do nome)
+      const partesNome = normalizarNome(nome).split(" ");
+      const pac_avatar =
         partesNome[0].charAt(0).toUpperCase() +
         partesNome[partesNome.length - 1].charAt(0).toUpperCase();
 
-    } else {
-
-      pac_avatar = partesNome[0]
-        .substring(0, 2)
-        .toUpperCase();
-
-    }
-
-
-      const sexoLimpo = (sexo || "").trim().toLowerCase();
-      let sexoFormatado;
-
-      switch (sexoLimpo) {
-        case "masculino":
-          sexoFormatado = "M";
-          break;
-        case "feminino":
-          sexoFormatado = "F";
-          break;
-        case "outro":
-          sexoFormatado = "O";
-          break;
-        case "prefiro não responder":
-          sexoFormatado = "N";
-          break;
-        default:
-          return res.status(400).json({
-            erro: "Sexo inválido",
-            recebido: sexo
-          });
-      }
-
-      if (!senha) {
-        return res.status(400).json({ erro: "Senha é obrigatória" });
-      }
-
       const hashSenha = await bcrypt.hash(senha, 10);
 
-      const dadoscreate = {
-        pac_nome: nome,
-        pac_email: email,
-        pac_telefone: telefone,
+      await knex('pacientes').insert({
+        pac_nome: normalizarNome(nome),
+        pac_email: emailNormalizado,
+        pac_telefone: formatarTelefone(telefone),
         pac_senha: hashSenha,
-        pac_cpf: cpf,
-        pac_data_nasc: data_nasc || null,
-        pac_sexo: sexoFormatado || null,
-        pac_endereco: endereco,
-        pac_raca: raca || null,
-        pac_cep: cep || null,
+        pac_cpf: formatarCPF(cpf),
+        pac_data_nasc: data_nasc,
+        pac_sexo: sexoFormatado,
+        pac_endereco: String(endereco).trim(),
+        pac_raca: racaFinal,
+        pac_cep: formatarCEP(cep),
         pac_avatar
-      };
-
-        // Fazendo as validaçoe do email, cep e cpf
-
-      const regexEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      const regexCep = /^\d{5}-?\d{3}$/;
-      const regexCpf = /^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$/;
-      const regexTelefone = /^(?:\(\d{2}\) \d{5}-\d{4}|\d{11})$/;
-
-      if (!telefone || !regexTelefone.test(telefone)) {
-  return res.status(400).json({
-    sucesso: false,
-    erros: ["Telefone inválido. Use (24) 99999-9999 ou 24999999999"]
-  });
-}
-
-      if (!email || !regexEmail.test(email)) {
-  return res.status(400).json({
-    sucesso: false,
-    erros: ["E-mail inválido"]
-  });
-}
-  const emailExistente = await knex('pacientes')
- .where('pac_email', email).first();
-   
- if (emailExistente) {
-    console.log("E-mail já cadastrado:", email);
-  return res.status(400).json({
-    
-    sucesso: false,
-    erros: ["E-mail já cadastrado"],
-  })
-  console.log("E-mail já cadastrado:", email);
-}
-// Validação do Cep
-if (!cep || !regexCep.test(cep)) {
-  return res.status(400).json({
-    sucesso: false,
-    erros: ["CEP inválido"]
-  });
-}
-
-// Validação do CPF
-if (!cpf || !regexCpf.test(cpf)) {
-    console.log("CPF inválido!");
-  return res.status(400).json({
-    sucesso: false,
-    erros: ["CPF inválido"]
-  });
-}
-      await knex('pacientes').insert(dadoscreate);
+      });
 
       return res.status(201).json({ msg: "Usuário cadastrado com êxito" });
 
     } catch (erro) {
-      console.error("ERRO NO BACKEND:", erro);
-      return res.status(500).json({ erro: erro.message });
-    }
-  },
-
-  // Login unificado (Paciente, Prescritor ou Admin)
-  async login(req, res) {
-    try {
-      const { email, senha } = req.body;
-
-      if (!email || !senha) {
-        return res.status(400).json({ erro: "E-mail e senha são obrigatórios" });
-      }
-
-      const secret = process.env.ACCESS_TOKEN_SECRET || 'sua_chave_secreta_fallback';
-
-      // 1º Tenta Paciente
-      const paciente = await knex("pacientes").where("pac_email", email).first();
-      if (paciente) {
-        const senhaValida = await bcrypt.compare(senha, paciente.pac_senha);
-        if (senhaValida) {
-          const token = jsonwebtoken.sign(
-            { id: paciente.pac_id || paciente.id,pac_id: paciente.pac_id || paciente.id, email: paciente.pac_email, tipo: 'PACIENTE' },
-            secret,
-            { expiresIn: '7d' }
-          );
-          //console.log("RESPOSTA:", response.data);
-//console.log("TOKEN:", response.data.token);
-          return res.status(200).json({
-            msg: "Autenticação realizada com sucesso",
-            token,
-            usuario: paciente,
-            tipo: 'PACIENTE'
-          });
-        }
-      }
-
-      // 2º Tenta autorizador
-      const autorizador = await knex("autorizador").where({ aut_email: email }).first();
-      if (autorizador) {
-        const senhaValida = await bcrypt.compare(senha, autorizador.aut_senha);
-        if (senhaValida) {
-          const token = jsonwebtoken.sign(
-            { id: autorizador.aut_id, email: autorizador.aut_email, tipo: 'AUTORIZADOR' },
-            secret,
-            { expiresIn: "7d" }
-          );
-          return res.status(200).json({
-            msg: "Autenticação realizada com sucesso",
-            token,
-            usuario: autorizador,
-            tipo: "AUTORIZADOR"
-          });
-        }
-      }
-
-      // 3º Tenta Admin
-      const admin = await knex("administrador").where({ adm_email: email }).first();
-      if (admin) {
-        const senhaValida = await bcrypt.compare(senha, admin.adm_senha);
-        if (senhaValida) {
-          const token = jsonwebtoken.sign(
-            { id: admin.adm_id, email: admin.adm_email, tipo: 'ADMIN' },
-            secret,
-            { expiresIn: "7d" }
-          );
-          return res.status(200).json({
-            msg: "Autenticação realizada com sucesso",
-            token,
-            usuario: admin,
-            tipo: "ADMIN"
-          });
-        }
-      }
-
-      // Se não encontrou usuário ou a senha estava errada
-      return res.status(401).json({ msg: "E-mail ou senha inválidos" });
-
-    } catch (erro) {
-      console.error("ERRO NO LOGIN:", erro);
-      return res.status(500).json({ erro: erro.message });
+      console.error("ERRO NO CADASTRO DE PACIENTE:", erro);
+      return res.status(500).json({ erro: "Erro ao cadastrar paciente. Tente novamente." });
     }
   },
 
@@ -269,11 +153,49 @@ if (!cpf || !regexCpf.test(cpf)) {
             });
         }
 
+        // Mesmas regras do cadastro, para o perfil não aceitar dados inválidos.
+        const validadores = {
+            nome: () => validarNome(valor),
+            cpf: () => validarCPF(valor),
+            cep: () => validarCEP(valor),
+            data_nascimento: () => validarDataNascimento(valor),
+            email: () => validarEmail(valor),
+            telefone: () => validarTelefone(valor),
+            endereco: () => String(valor).trim().length >= 5 ? null : "Informe o endereço completo.",
+        };
+        const erroValidacao = validadores[campo]?.();
+        if (erroValidacao) {
+            return res.status(400).json({ erro: erroValidacao });
+        }
+
+        const formatadores = {
+            nome: normalizarNome,
+            cpf: formatarCPF,
+            cep: formatarCEP,
+            email: normalizarEmail,
+            telefone: formatarTelefone,
+        };
+        const valorFinal = formatadores[campo] ? formatadores[campo](valor) : String(valor).trim();
+
+        if (campo === "email" || campo === "cpf") {
+            const duplicado = await knex("pacientes")
+                .whereNot("pac_id", pacienteId)
+                .modify((q) => campo === "email"
+                    ? q.whereRaw("LOWER(pac_email) = ?", [valorFinal])
+                    : q.whereRaw(...whereCpf("pac_cpf"), [somenteDigitos(valorFinal)]))
+                .first();
+            if (duplicado) {
+                return res.status(409).json({
+                    erro: campo === "email" ? "E-mail já cadastrado." : "CPF já cadastrado."
+                });
+            }
+        }
+
         // 🔹 ALTERA O CAMPO NO BANCO
         await knex("pacientes")
             .where("pac_id", pacienteId)
             .update({
-                [coluna]: valor
+                [coluna]: valorFinal
             });
 
         // 🔹 BUSCA OS DADOS ATUALIZADOS
@@ -283,7 +205,7 @@ if (!cpf || !regexCpf.test(cpf)) {
 
         return res.status(200).json({
             mensagem: "Perfil atualizado com sucesso",
-            usuario: pacienteAtualizado
+            usuario: semSenha(pacienteAtualizado)
         });
 
     } catch (error) {
@@ -296,20 +218,77 @@ if (!cpf || !regexCpf.test(cpf)) {
 },
   
 
-  async buscarPorCpf (req, res) {
-try {
-const { cpf } = req.query;
-if (!cpf) return res.status(200).send([]);
-const termoLimpo = cpf.replace(/\D/g, '');
-const pacientes = await knex('pacientes')
-.whereRaw("REPLACE(REPLACE(REPLACE(pac_cpf, '.', ''), '-', ''), ' ', '') LIKE ?", [`%${termoLimpo}%`])
-.select('pac_id', 'pac_nome', 'pac_cpf', 'pac_telefone').limit(10);
-return res.status(200).send(pacientes);
-} catch (error) {
-return res.status(500).send({ message: 'Erro ao buscar pacientes', error: error.message });
-}
+  // Busca de pacientes para o admin: por CPF (com ou sem pontuação) ou por
+  // nome. Aceita ?cpf= (formato antigo) ou ?busca=.
+  async buscarPorCpf(req, res) {
+    try {
+      const termo = String(req.query.busca ?? req.query.cpf ?? '').trim();
+      const digitos = termo.replace(/\D/g, '');
+      const temLetras = /[A-Za-zÀ-ÿ]/.test(termo);
 
+      if (!digitos && !temLetras) return res.status(200).send([]);
+      if (temLetras && termo.length < 2) return res.status(200).send([]);
 
+      const consulta = knex('pacientes').select('pac_id', 'pac_nome', 'pac_cpf', 'pac_telefone');
+      if (temLetras) {
+        consulta.whereILike('pac_nome', `%${termo}%`).orderBy('pac_nome');
+      } else {
+        consulta.whereRaw("REPLACE(REPLACE(REPLACE(pac_cpf, '.', ''), '-', ''), ' ', '') LIKE ?", [`%${digitos}%`]);
+      }
 
-}
+      return res.status(200).send(await consulta.limit(10));
+    } catch (error) {
+      console.error('Erro ao buscar pacientes:', error);
+      return res.status(500).send({ message: 'Erro ao buscar pacientes' });
+    }
+  },
+
+  // FICHA DO PACIENTE (visão do admin): dados cadastrais, prescrições e
+  // agendamentos, para atender sem precisar abrir várias telas.
+  async resumoPaciente(req, res) {
+    try {
+      const { id } = req.params;
+
+      const paciente = await knex('pacientes').where('pac_id', id).first();
+      if (!paciente) return res.status(404).send({ message: 'Paciente não encontrado' });
+
+      const solicitacoes = await knex('solicitacao as sol')
+        .leftJoin('postosdesaude as pos', 'pos.pos_id', 'sol.pos_id')
+        .leftJoin('insumo as ins', 'ins.ins_id', 'sol.ins_id')
+        .where('sol.pac_id', id)
+        .select(
+          'sol.sol_id', 'sol.sol_status', 'sol.sol_protocolo', 'sol.sol_data_solicitacao',
+          'sol.sol_data_de_coleta', 'sol.sol_data_vencimento', 'sol.sol_insumo_quant',
+          'sol.sol_motivo_nao_autorizado', 'sol.sol_motivo_reenvio', 'sol.sol_motivo_cancelamento',
+          'sol.sol_origem_id', 'sol.pos_id', 'pos.pos_nome', 'ins.ins_nome',
+          knex.raw('(sol.sol_prescricao IS NOT NULL) AS tem_prescricao'),
+        )
+        .orderBy('sol.sol_id', 'desc');
+
+      const ehAgendamento = (s) => ['agendado', 'concluido', 'cancelado'].includes(s.sol_status);
+
+      // insumos de cada agendamento
+      const idsAgendamento = solicitacoes.filter(ehAgendamento).map((s) => s.sol_id);
+      const itens = idsAgendamento.length
+        ? await knex('coleta as col')
+          .leftJoin('insumo as ins', 'ins.ins_id', 'col.ins_id')
+          .whereIn('col.sol_id', idsAgendamento)
+          .select('col.sol_id', 'ins.ins_nome', 'col.quantidade')
+        : [];
+
+      const agendamentos = solicitacoes.filter(ehAgendamento).map((a) => ({
+        ...a,
+        insumos: itens.filter((i) => i.sol_id === a.sol_id).map(({ ins_nome, quantidade }) => ({ ins_nome, quantidade })),
+      }));
+
+      return res.status(200).send({
+        paciente: semSenha(paciente),
+        prescricoes: solicitacoes.filter((s) => !ehAgendamento(s)),
+        agendamentos,
+      });
+    } catch (error) {
+      console.error('Erro ao montar ficha do paciente:', error);
+      return res.status(500).send({ message: 'Erro ao buscar dados do paciente' });
+    }
+  },
 };

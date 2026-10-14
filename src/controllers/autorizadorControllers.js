@@ -1,5 +1,11 @@
 import knex from '../database/index.js';
 import bcrypt from 'bcrypt';
+import {
+  coletarErros, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome, somenteDigitos,
+  validarConfirmacaoSenha, validarCPF, validarEmail, validarNome, validarSenha,
+  validarMotivo, validarTelefone, whereCpf,
+} from '../utils/validacoes.js';
+import { ACOES, registrarHistorico } from '../utils/historico.js';
 
 export default {
 
@@ -10,17 +16,15 @@ export default {
   async autorizadorrall(req, res) {
     try {
 
-      const dados = await knex('autorizador');
+      const dados = (await knex('autorizador')).map(({ aut_senha, ...resto }) => resto);
 
-      console.log(dados);
 
       return res.status(200).send(dados);
 
     } catch (error) {
 
       return res.status(500).send({
-        message: 'Erro ao buscar autorizadores',
-        error: error.message
+        message: 'Erro ao buscar autorizadores'
       });
 
     }
@@ -39,7 +43,6 @@ export default {
  async buscarPrescricoesAprovadas(req, res) {
     try {
 
-        console.log("========== PRESCRIÇÕES PARA AUTORIZADOR ==========");
 
         const prescricoes = await knex("solicitacao as sol")
             .innerJoin(
@@ -88,10 +91,6 @@ export default {
                 "asc"
             );
 
-        console.log(
-            "PRESCRIÇÕES ENCONTRADAS:",
-            prescricoes
-        );
 
         return res.status(200).json(prescricoes);
 
@@ -103,7 +102,7 @@ export default {
         );
 
         return res.status(500).json({
-            error: error.message
+            error: "Erro ao buscar prescrições."
         });
     }
 },
@@ -119,12 +118,10 @@ export default {
     try {
 
       const { id } = req.params;
-console.log("ID recebido em buscarSolicitacaoAprovada:", id);
 
 if (!/^\d+$/.test(id)) {
   return res.status(400).json({
-    error: "ID da solicitação inválido.",
-    idRecebido: id
+    error: "ID da solicitação inválido."
   });
 }
 
@@ -329,7 +326,7 @@ if (!/^\d+$/.test(id)) {
 async alterarStatusAutorizador(req, res) {
     try {
         const { id } = req.params;
-        const { sol_status, sol_motivo_nao_autorizado } = req.body;
+        const { sol_status, sol_motivo_nao_autorizado } = req.body ?? {};
 
         if (
             sol_status !== "Autorizado" &&
@@ -340,13 +337,11 @@ async alterarStatusAutorizador(req, res) {
             });
         }
 
-        if (
-            sol_status === "Nao Autorizado" &&
-            !sol_motivo_nao_autorizado?.trim()
-        ) {
-            return res.status(400).json({
-                error: "Informe o motivo da não autorização."
-            });
+        if (sol_status === "Nao Autorizado") {
+            const erroMotivo = validarMotivo(sol_motivo_nao_autorizado, "da não autorização");
+            if (erroMotivo) {
+                return res.status(400).json({ error: erroMotivo });
+            }
         }
 
         // Buscar antes de atualizar
@@ -374,12 +369,35 @@ const motivoSalvo =
         ? sol_motivo_nao_autorizado.trim()
         : null;
 
-await knex("solicitacao")
-    .where("sol_id", id)
-    .update({
-        sol_status,
-        sol_motivo_nao_autorizado: motivoSalvo,
+// UPDATE condicional: se outro autorizador decidiu no meio tempo,
+// nenhuma linha muda e a segunda decisão é recusada.
+const alteradas = await knex.transaction(async (trx) => {
+    const n = await trx("solicitacao")
+        .where("sol_id", id)
+        .whereIn("sol_status", ["Aprovado", "Revisado"])
+        .update({
+            sol_status,
+            sol_motivo_nao_autorizado: motivoSalvo,
+        });
+
+    // assinatura de quem decidiu, na mesma transação
+    if (n) {
+        await registrarHistorico(trx, req.session, {
+            sol_id: Number(id),
+            acao: sol_status === "Autorizado" ? ACOES.AUTORIZADA : ACOES.NAO_AUTORIZADA,
+            de: solicitacao.sol_status,
+            para: sol_status,
+            detalhe: motivoSalvo,
+        });
+    }
+    return n;
+});
+
+if (!alteradas) {
+    return res.status(409).json({
+        error: "Esta prescrição já foi finalizada ou não está disponível para análise."
     });
+}
 
 const solicitacaoAtualizada = await knex("solicitacao")
     .select(
@@ -390,7 +408,6 @@ const solicitacaoAtualizada = await knex("solicitacao")
     .where("sol_id", id)
     .first();
 
-console.log("Solicitação atualizada:", solicitacaoAtualizada);
 
 return res.status(200).json({
     message: "Prescrição atualizada com sucesso.",
@@ -418,68 +435,61 @@ return res.status(200).json({
 
     try {
 
-      console.log(
-        "BODY:",
-        req.body
-      );
-
-
       const {
         nome,
         email,
         telefone,
         senha,
+        confirmacao_senha,
         cpf
-      } = req.body;
+      } = req.body ?? {};
 
-
-      const hashSenha =
-        await bcrypt.hash(
-          senha,
-          10
-        );
-
-
-      const dadoscreate = {
-
-        aut_nome: nome,
-
-        aut_email: email,
-
-        aut_tel: telefone,
-
-        aut_senha: hashSenha,
-
-        aut_cpf: cpf
-
-      };
-
-
-      await knex(
-        'autorizador'
-      ).insert(
-        dadoscreate
+      const erros = coletarErros(
+        validarNome(nome),
+        validarEmail(email),
+        validarTelefone(telefone),
+        validarCPF(cpf),
+        validarSenha(senha),
+        validarConfirmacaoSenha(senha, confirmacao_senha),
       );
+      if (erros.length) {
+        return res.status(400).json({ sucesso: false, erros });
+      }
 
+      const emailExiste = await knex('autorizador')
+        .whereRaw('LOWER(aut_email) = ?', [normalizarEmail(email)])
+        .first();
+      if (emailExiste) {
+        return res.status(409).json({ erro: 'E-mail já cadastrado' });
+      }
 
-      return res.status(201).send({
+      const cpfExiste = await knex('autorizador')
+        .whereRaw(...whereCpf('aut_cpf'), [somenteDigitos(cpf)])
+        .first();
+      if (cpfExiste) {
+        return res.status(409).json({ erro: 'CPF já cadastrado' });
+      }
 
-        message:
-          'Autorizador criado com sucesso'
+      const hashSenha = await bcrypt.hash(senha, 10);
 
+      await knex('autorizador').insert({
+        aut_nome: normalizarNome(nome),
+        aut_email: normalizarEmail(email),
+        aut_tel: formatarTelefone(telefone),
+        aut_senha: hashSenha,
+        aut_cpf: formatarCPF(cpf)
       });
 
+      return res.status(201).send({
+        message: 'Autorizador criado com sucesso'
+      });
 
     } catch (error) {
 
+      console.error('Erro ao criar autorizador:', error);
+
       return res.status(500).send({
-
-        message:
-          'Erro ao criar Autorizador',
-
-        error:
-          error.message
-
+        erro: 'Erro ao criar autorizador. Tente novamente.'
       });
 
     }

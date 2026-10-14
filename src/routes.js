@@ -10,26 +10,54 @@ import agendamentosControllers from "./controllers/agendamentosControllers.js";
 import insumosControllers from "./controllers/insumosControllers.js";
 import solicitacaoControllers from "./controllers/solicitacaoControllers.js";
 import autorizadorControllers from "./controllers/autorizadorControllers.js";
+import painelControllers from "./controllers/painelControllers.js";
 import autorizarAut from "./middleware/autorizarAut.js";
 import autorizarVisualizacaoPrescricao from "./middleware/autorizarVisualizacaoPrescricao.js";
+import { limiteLogin } from "./middleware/limiteLogin.js";
+import autorizarPaciente from "./middleware/autorizarPaciente.js";
+import { idValido } from "./utils/validacoes.js";
 
 
 const routes = express.Router();
 
+// Todo ":id" das rotas precisa ser um número inteiro positivo; sem isso,
+// "/solicitacao/abc" chegava ao banco e virava erro 500.
+routes.param('id', (req, res, next, id) => {
+    if (!idValido(id)) {
+        return res.status(400).json({ error: 'Identificador inválido.' });
+    }
+    return next();
+});
+
 routes.get('/', raizControllers.index);
 
 // Rotas do paciente
-routes.get('/pacientesall', pacientesControllers.pacientesall);
+routes.get('/pacientesall', authorization, autorizarAdmin, pacientesControllers.pacientesall);
 
 // Rota post do paciente
 routes.post('/pacientes', pacientesControllers.createpaciente);
 
 routes.get('/pacientes', authorization, autorizarAdmin, pacientesControllers.buscarPorCpf);
 routes.put(
-    "/pacientes/perfil", authorization, pacientesControllers.atualizarPerfil
+    "/pacientes/perfil", authorization, autorizarPaciente, pacientesControllers.atualizarPerfil
 );
+// ficha completa do paciente (dados, prescrições e agendamentos) para o admin
+routes.get('/pacientes/:id/resumo', authorization, autorizarAdmin, pacientesControllers.resumoPaciente);
 
-routes.post('/login',administradorControllers.loginGeral)
+// Perfil pessoal do admin e do autorizador
+const autorizarAdminOuAut = (req, res, next) =>
+    ['ADMIN', 'AUTORIZADOR'].includes(req.session?.tipo)
+        ? next()
+        : res.status(403).json({ error: 'Acesso restrito a administradores e autorizadores' });
+routes.get('/perfil', authorization, autorizarAdminOuAut, painelControllers.meuPerfil);
+routes.put('/perfil', authorization, autorizarAdminOuAut, painelControllers.atualizarMeuPerfil);
+
+// Home do admin (fila de trabalho)
+routes.get('/painel/admin', authorization, autorizarAdmin, painelControllers.painelAdmin);
+// atividades da unidade (histórico geral de quem fez o quê)
+routes.get('/atividades', authorization, autorizarAdmin, painelControllers.atividades);
+
+routes.post('/login', limiteLogin, administradorControllers.loginGeral)
 
 //Rota de Validação de Token
 routes.get('/validar', authorization, (req, res)=>{
@@ -44,7 +72,7 @@ routes.get('/postos' , postocoleta.listar)
 
 //rotas administrador
 
-routes.get('/administradorall', administradorControllers.administradorall);
+routes.get('/administradorall', authorization, autorizarAdmin, administradorControllers.administradorall);
 
 routes.post('/administrador', administradorControllers.createadministrador);
 
@@ -79,11 +107,13 @@ routes.patch(
 
 //agendamento
 routes.get('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.listar);
+routes.get('/agendamentos/datas-sugeridas', authorization, autorizarAdmin, painelControllers.datasSugeridas);
 routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.criar);
 
 routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, 
 agendamentosControllers.concluir);
 routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, agendamentosControllers.cancelar);
+routes.patch('/agendamentos/:id/recado', authorization, autorizarAdmin, agendamentosControllers.salvarRecado);
 
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);
@@ -99,7 +129,7 @@ routes.post('/insumos', authorization, autorizarAdmin, insumosControllers.criarI
 
 
 //rotas solicitaçao
-routes.post('/solicitacoes',authorization,solicitacaoControllers.createSolicitacao);
+routes.post('/solicitacoes', authorization, autorizarPaciente, solicitacaoControllers.createSolicitacao);
 
 routes.get('/pendentes',authorization,autorizarAdmin,solicitacaoControllers.buscarprescricoespendetes);
 
@@ -109,11 +139,13 @@ routes.get(
     solicitacaoControllers.buscarPrescricao
   );
 
-routes.get("/solicitacao/pacienteid", authorization, solicitacaoControllers.prescicaodopaciente);
+routes.get("/solicitacao/pacienteid", authorization, autorizarPaciente, solicitacaoControllers.prescicaodopaciente);
+// prescrições do paciente com agendamento e linha do tempo (rastreio)
+routes.get("/minhas-prescricoes", authorization, autorizarPaciente, solicitacaoControllers.minhasPrescricoes);
 
 
 routes.get(
-  "/solicitacao/:id/detalhes",authorization,solicitacaoControllers.detalhesPrescricaoPaciente
+  "/solicitacao/:id/detalhes", authorization, autorizarPaciente, solicitacaoControllers.detalhesPrescricaoPaciente
 );
 
 
@@ -123,6 +155,16 @@ routes.get(
   solicitacaoControllers.buscarSolicitacaoPorId
 );
 
+
+// transferir prescrição em andamento ou agendamento para outra unidade
+routes.patch(
+  "/solicitacao/:id/transferir",
+  authorization, autorizarAdmin, validarAcessoSolicitacao,
+  solicitacaoControllers.transferirUnidade
+);
+
+// histórico (quem fez o quê); o controller confere o perfil e a posse
+routes.get("/solicitacao/:id/historico", authorization, solicitacaoControllers.historico);
 
 routes.patch(
   "/solicitacao/:id/reenvio",
