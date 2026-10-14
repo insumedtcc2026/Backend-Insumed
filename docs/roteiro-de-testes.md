@@ -23,15 +23,16 @@ npm install
 
 ## Nível 1 — banco em memória (recomendado começar por aqui)
 
-1. **Testes automáticos do backend** (50 cenários: solicitação, autorização,
-   agendamento, coleta, segurança, regressão, histórico, transferência):
+1. **Testes automáticos do backend** (53 cenários: solicitação, autorização,
+   agendamento, coleta, segurança, regressão, histórico, transferência,
+   rastreio do paciente, atividades da unidade):
 
    ```
    cd Backend-Insumed
    npm test
    ```
 
-   Deve terminar com `pass 50` e `fail 0`.
+   Deve terminar com `pass 53` e `fail 0`.
 
 2. **Backend com dados fictícios** (deixe esta janela aberta):
 
@@ -175,6 +176,21 @@ Marque cada item em celular (DevTools, 375 px) e no computador.
 - [ ] Comprovante com QR Code; "Imprimir / salvar PDF" imprime só o comprovante.
 - [ ] "Falar com a unidade" só aparece se o posto tiver WhatsApp cadastrado
       (no branch de teste: `UPDATE postosdesaude SET pos_whatsapp = '55DDDNUMERO' WHERE pos_id = 1;`).
+
+### Fase 4 — páginas do paciente
+- [ ] "Minhas prescrições" (menu e barra de baixo): rastreio em 5 etapas com datas.
+- [ ] Prescrição com reenvio pedido mostra o motivo e o botão "Enviar nova prescrição".
+- [ ] Prescrição não autorizada mostra o motivo; aparece em "Encerradas".
+- [ ] Perfil não lista mais prescrições, só o atalho para a página nova.
+- [ ] "Meus agendamentos": abas Próximos (próxima coleta em destaque) e Anteriores.
+
+### Fase 5 — acessibilidade, atividades e envio de prescrição
+- [ ] Botão "VLibras" (lado direito) abre o tradutor de Libras.
+- [ ] Botão "Aa" (lado esquerdo): A+ / A− muda o tamanho do texto; "Alto contraste" liga e desliga; continua igual ao recarregar.
+- [ ] Apertar Tab ao abrir uma página mostra "Pular para o conteúdo".
+- [ ] Admin: "Atividades da unidade" lista quem fez o quê; filtros de data, tipo, pessoa e paciente funcionam.
+- [ ] Enviar prescrição: visual igual ao das outras páginas; arrastar o arquivo funciona;
+      arquivo errado ou maior que 5 MB e envio sem unidade mostram a mensagem na tela.
 
 ---
 
