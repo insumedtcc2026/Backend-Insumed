@@ -18,19 +18,22 @@ export const ACOES = {
   RECADO: 'recado',                      // admin deixou/alterou o recado
 };
 
+// Como achar quem está logado em cada tabela. A tabela "administrador" não
+// tem coluna de id: o admin é identificado pelo e-mail que vai no token.
 const TABELA_USUARIO = {
-  ADMIN: ['administrador', 'adm_id', 'adm_nome'],
-  AUTORIZADOR: ['autorizador', 'aut_id', 'aut_nome'],
-  PACIENTE: ['pacientes', 'pac_id', 'pac_nome'],
+  ADMIN: { tabela: 'administrador', nome: 'adm_nome', filtro: (qb, s) => qb.whereRaw('LOWER(adm_email) = ?', [String(s.email ?? '').toLowerCase()]) },
+  AUTORIZADOR: { tabela: 'autorizador', nome: 'aut_nome', filtro: (qb, s) => qb.where('aut_id', s.id) },
+  PACIENTE: { tabela: 'pacientes', nome: 'pac_nome', filtro: (qb, s) => qb.where('pac_id', s.id) },
 };
 
 // Nome de quem está logado, guardado junto com a ação (assinatura).
+// Se não der para identificar, a ação é gravada mesmo assim, sem o nome.
 export async function nomeDoUsuario(db, sessao) {
   const t = TABELA_USUARIO[sessao?.tipo];
   if (!t) return null;
-  const [tabela, id, nome] = t;
-  const linha = await db(tabela).where(id, sessao.id).first(nome);
-  return linha?.[nome] ?? null;
+  if (sessao.tipo === 'ADMIN' ? !sessao.email : sessao.id == null) return null;
+  const linha = await db(t.tabela).modify((qb) => t.filtro(qb, sessao)).first(t.nome);
+  return linha?.[t.nome] ?? null;
 }
 
 /**

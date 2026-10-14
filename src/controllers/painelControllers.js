@@ -1,4 +1,5 @@
 import knex from '../database/index.js';
+import jsonwebtoken from 'jsonwebtoken';
 import {
   coletarErros, dataHojeBrasil, formatarTelefone, normalizarEmail, normalizarNome,
   validarDataISO, validarEmail, validarNome, validarTelefone,
@@ -19,31 +20,36 @@ const doPosto = (admin, coluna) => (qb) => {
 const contar = async (query) => Number((await query.count({ total: '*' }).first())?.total ?? 0);
 
 // Perfis de admin e autorizador compartilham as mesmas regras de edição.
+// A tabela "administrador" NÃO tem coluna de id: o admin é identificado pelo
+// e-mail (único), que vai no token do login. O autorizador tem aut_id.
 const PERFIS = {
   ADMIN: {
-    tabela: 'administrador', id: 'adm_id',
+    tabela: 'administrador',
     colunas: { nome: 'adm_nome', email: 'adm_email', telefone: 'adm_tel' },
+    // filtro "é o usuário logado"
+    doUsuario: (sessao, alias = '') => (qb) =>
+      qb.whereRaw(`LOWER(${alias}adm_email) = ?`, [String(sessao.email ?? '').toLowerCase()]),
   },
   AUTORIZADOR: {
-    tabela: 'autorizador', id: 'aut_id',
+    tabela: 'autorizador',
     colunas: { nome: 'aut_nome', email: 'aut_email', telefone: 'aut_tel' },
+    doUsuario: (sessao, alias = '') => (qb) => qb.where(`${alias}aut_id`, sessao.id ?? null),
   },
 };
 
-async function buscarPerfil(tipo, id) {
-  if (tipo === 'ADMIN') {
+async function buscarPerfil(sessao) {
+  if (sessao.tipo === 'ADMIN') {
     const adm = await knex('administrador as adm')
       .leftJoin('postosdesaude as pos', 'pos.pos_id', 'adm.pos_id')
-      .where('adm.adm_id', id)
+      .modify(PERFIS.ADMIN.doUsuario(sessao, 'adm.'))
       .first(
-        'adm.adm_id', 'adm.adm_matricula', 'adm.adm_nome', 'adm.adm_email', 'adm.adm_tel',
+        'adm.adm_matricula', 'adm.adm_nome', 'adm.adm_email', 'adm.adm_tel',
         'adm.adm_cpf', 'adm.tp_universal', 'adm.pos_id',
         'pos.pos_nome', 'pos.pos_endereco',
       );
     if (!adm) return null;
     return {
-      tipo,
-      id: adm.adm_id,
+      tipo: 'ADMIN',
       nome: adm.adm_nome,
       email: adm.adm_email,
       telefone: adm.adm_tel,
@@ -55,11 +61,11 @@ async function buscarPerfil(tipo, id) {
   }
 
   const aut = await knex('autorizador')
-    .where('aut_id', id)
+    .modify(PERFIS.AUTORIZADOR.doUsuario(sessao))
     .first('aut_id', 'aut_nome', 'aut_email', 'aut_tel', 'aut_cpf');
   if (!aut) return null;
   return {
-    tipo,
+    tipo: 'AUTORIZADOR',
     id: aut.aut_id,
     nome: aut.aut_nome,
     email: aut.aut_email,
@@ -73,7 +79,7 @@ export default {
   // PERFIL DO USUÁRIO LOGADO (admin ou autorizador)
   async meuPerfil(req, res) {
     try {
-      const perfil = await buscarPerfil(req.session.tipo, req.session.id);
+      const perfil = await buscarPerfil(req.session);
       if (!perfil) return res.status(404).json({ error: 'Usuário não encontrado' });
       return res.status(200).json(perfil);
     } catch (error) {
@@ -86,32 +92,48 @@ export default {
   // CPF, matrícula e posto não são alterados por aqui.
   async atualizarMeuPerfil(req, res) {
     try {
-      const config = PERFIS[req.session.tipo];
+      const sessao = req.session;
+      const config = PERFIS[sessao.tipo];
       if (!config) return res.status(403).json({ error: 'Perfil sem permissão' });
 
       const { nome, email, telefone } = req.body ?? {};
       const erros = coletarErros(validarNome(nome), validarEmail(email), validarTelefone(telefone));
       if (erros.length) return res.status(400).json({ sucesso: false, erros });
 
-      const emailFinal = normalizarEmail(email);
-      const duplicado = await knex(config.tabela)
-        .whereRaw(`LOWER(${config.colunas.email}) = ?`, [emailFinal])
-        .whereNot(config.id, req.session.id)
-        .first(config.id);
-      if (duplicado) return res.status(409).json({ error: 'E-mail já cadastrado' });
+      const atual = await knex(config.tabela).modify(config.doUsuario(sessao)).first(config.colunas.email);
+      if (!atual) return res.status(404).json({ error: 'Usuário não encontrado' });
 
-      const alteradas = await knex(config.tabela)
-        .where(config.id, req.session.id)
+      const emailFinal = normalizarEmail(email);
+      const emailMudou = emailFinal !== String(atual[config.colunas.email] ?? '').toLowerCase();
+
+      if (emailMudou) {
+        const duplicado = await knex(config.tabela)
+          .whereRaw(`LOWER(${config.colunas.email}) = ?`, [emailFinal])
+          .first(config.colunas.email);
+        if (duplicado) return res.status(409).json({ error: 'E-mail já cadastrado' });
+      }
+
+      await knex(config.tabela)
+        .modify(config.doUsuario(sessao))
         .update({
           [config.colunas.nome]: normalizarNome(nome),
           [config.colunas.email]: emailFinal,
           [config.colunas.telefone]: formatarTelefone(telefone),
         });
-      if (!alteradas) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+      // O admin é identificado pelo e-mail do token: se ele mudou, devolve um
+      // token novo (mesmos dados, e-mail novo) para a sessão continuar valendo.
+      const novaSessao = { ...sessao, email: emailFinal };
+      let token;
+      if (emailMudou) {
+        const { iat, exp, ...dados } = novaSessao; // eslint-disable-line no-unused-vars
+        token = jsonwebtoken.sign(dados, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '7d' });
+      }
 
       return res.status(200).json({
         message: 'Perfil atualizado com sucesso',
-        perfil: await buscarPerfil(req.session.tipo, req.session.id),
+        perfil: await buscarPerfil(novaSessao),
+        ...(token ? { token } : {}),
       });
     } catch (error) {
       console.error('Erro ao atualizar perfil:', error);

@@ -25,7 +25,7 @@ db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
   create table pacientes (pac_id serial primary key, pac_nome text, pac_email text, pac_senha text, pac_cpf text,
     pac_telefone text, pac_cep text, pac_data_nasc date, pac_endereco text, pac_sexo text, pac_raca text, pac_avatar text);
-  create table administrador (adm_id serial primary key, adm_matricula text, adm_nome text, adm_email text, adm_tel text,
+  create table administrador (adm_matricula text, adm_nome text, adm_email text, adm_tel text,
     adm_senha text, adm_cpf text, pos_id int, tp_universal boolean);
   create table autorizador (aut_id serial primary key, aut_nome text, aut_email text, aut_tel text, aut_senha text, aut_cpf text);
   create table insumo (ins_id serial primary key, ins_nome text, ins_quantidade int, ins_marca text, pos_id int);
@@ -63,8 +63,8 @@ before(async () => {
   const [a] = await knex('pacientes').insert({ pac_nome: 'Ana Souza', pac_email: 'ana@teste.com', pac_senha: senha, pac_cpf: '529.982.247-25', pac_telefone: '(24) 98888-7777' }).returning('pac_id');
   const [b] = await knex('pacientes').insert({ pac_nome: 'Bruno Lima', pac_email: 'bruno@teste.com', pac_senha: senha, pac_cpf: '111.444.777-35', pac_telefone: '(24) 97777-6666' }).returning('pac_id');
   ids.pacA = a.pac_id; ids.pacB = b.pac_id;
-  const [adm] = await knex('administrador').insert({ adm_nome: 'Admin Geral', adm_email: 'adm@teste.com', adm_senha: senha, pos_id: ids.posto1, tp_universal: false }).returning('adm_id');
-  const [admN] = await knex('administrador').insert({ adm_nome: 'Admin Norte', adm_email: 'norte@teste.com', adm_senha: senha, pos_id: ids.posto2, tp_universal: false }).returning('adm_id');
+  await knex('administrador').insert({ adm_nome: 'Admin Geral', adm_email: 'adm@teste.com', adm_senha: senha, pos_id: ids.posto1, tp_universal: false });
+  await knex('administrador').insert({ adm_nome: 'Admin Norte', adm_email: 'norte@teste.com', adm_senha: senha, pos_id: ids.posto2, tp_universal: false });
   const [aut] = await knex('autorizador').insert({ aut_nome: 'Carla Dias', aut_email: 'aut@teste.com', aut_senha: senha }).returning('aut_id');
   const [ins] = await knex('insumo').insert({ ins_nome: 'Fralda G', ins_quantidade: 1, pos_id: ids.posto1 }).returning('ins_id');
   ids.insumo = ins.ins_id;
@@ -72,8 +72,8 @@ before(async () => {
   const assinar = (dados) => jwt.sign(dados, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
   tk.pacA = assinar({ id: ids.pacA, tipo: 'PACIENTE' });
   tk.pacB = assinar({ id: ids.pacB, tipo: 'PACIENTE' });
-  tk.adm = assinar({ id: adm.adm_id, posto_id: ids.posto1, tp_universal: false, tipo: 'ADMIN' });
-  tk.admNorte = assinar({ id: admN.adm_id, posto_id: ids.posto2, tp_universal: false, tipo: 'ADMIN' });
+  tk.adm = assinar({ email: 'adm@teste.com', posto_id: ids.posto1, tp_universal: false, tipo: 'ADMIN' });
+  tk.admNorte = assinar({ email: 'norte@teste.com', posto_id: ids.posto2, tp_universal: false, tipo: 'ADMIN' });
   // admin com o MESMO id numérico do paciente A (cenário de confusão de perfis)
   tk.admMesmoId = assinar({ id: ids.pacA, posto_id: ids.posto1, tp_universal: true, tipo: 'ADMIN' });
   tk.aut = assinar({ id: aut.aut_id, tipo: 'AUTORIZADOR' });
@@ -321,7 +321,9 @@ test('C6 cancelamento exige motivo e grava motivo, data e responsável', async (
   assert.equal(linha.sol_status, 'cancelado');
   assert.equal(linha.sol_motivo_cancelamento, 'Paciente pediu para remarcar');
   assert.ok(linha.sol_data_cancelamento);
-  assert.ok(linha.sol_cancelado_por);
+  // a tabela administrador não tem id: quem cancelou fica assinado no histórico
+  const his = await knex('historico_solicitacao').where({ sol_id: ids.ag1, his_acao: 'cancelada' }).first();
+  assert.equal(his.his_usuario_nome, 'Admin Geral');
 });
 
 test('C7 cancelamento repetido e conclusão de cancelado são bloqueados', async () => {
@@ -746,4 +748,15 @@ test('K1 agendamentos: admin de posto vê e age só no próprio posto; universal
   assert.equal((await request(app).patch(`/agendamentos/${id}/recado`).set(auth(tk.admNorte)).send({ recado: 'x' })).status, 403);
   assert.equal((await request(app).patch(`/agendamentos/${id}/concluir`).set(auth(tk.admNorte))).status, 403);
   assert.equal((await knex('solicitacao').where('sol_id', id).first()).sol_status, 'agendado');
+});
+
+test('K2 admin troca o e-mail no perfil e recebe token novo que continua valendo', async () => {
+  const r = await request(app).put('/perfil').set(auth(tk.adm)).send({ nome: 'Admin Geral', email: 'adm.novo@teste.com', telefone: '24999990000' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.token, 'deve devolver token novo');
+  assert.equal(r.body.perfil.email, 'adm.novo@teste.com');
+  assert.equal((await request(app).get('/perfil').set(auth(r.body.token))).body.email, 'adm.novo@teste.com');
+  // volta ao e-mail original para não afetar outros testes
+  const volta = await request(app).put('/perfil').set(auth(r.body.token)).send({ nome: 'Admin Geral', email: 'adm@teste.com', telefone: '24999990000' });
+  assert.equal(volta.status, 200);
 });

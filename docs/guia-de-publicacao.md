@@ -22,7 +22,7 @@ Tempo estimado: 30 a 45 minutos, contando os testes no final.
       melhor não ter ninguém no meio de um agendamento).
 - [ ] Tenha acesso de administrador ao **Neon**, à **Vercel** (os dois
       projetos) e ao **GitHub** da organização `insumedtcc2026`.
-- [ ] Rode os testes automáticos do backend no branch (devem dar `pass 53`):
+- [ ] Rode os testes automáticos do backend no branch (devem dar `pass 55`):
 
   ```
   cd Backend-Insumed
