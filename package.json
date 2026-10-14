@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "nodemon src/server.js",
-    "test": "node --experimental-test-module-mocks --test testes/api.test.mjs"
+    "test": "node --experimental-test-module-mocks --test testes/api.test.mjs",
+    "dev:memoria": "node --experimental-test-module-mocks testes/servidor-memoria.mjs"
   },
   "keywords": [],
   "author": "Projeto Insumed",
