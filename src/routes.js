@@ -110,10 +110,11 @@ routes.get('/agendamentos', authorization, autorizarAdmin, agendamentosControlle
 routes.get('/agendamentos/datas-sugeridas', authorization, autorizarAdmin, painelControllers.datasSugeridas);
 routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.criar);
 
-routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, 
-agendamentosControllers.concluir);
-routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, agendamentosControllers.cancelar);
-routes.patch('/agendamentos/:id/recado', authorization, autorizarAdmin, agendamentosControllers.salvarRecado);
+// admin de posto só age nos agendamentos do próprio posto (validarAcessoSolicitacao);
+// o admin universal age em todos
+routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.concluir);
+routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.cancelar);
+routes.patch('/agendamentos/:id/recado', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.salvarRecado);
 
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);

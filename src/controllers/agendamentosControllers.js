@@ -139,6 +139,12 @@ export default {
 
             let query = baseQueryAgendamentos();
 
+            // admin de posto vê só os agendamentos do próprio posto; o universal vê todos
+            const admin = req.session;
+            if (!admin.tp_universal) {
+                query = query.where('sol.pos_id', admin.posto_id ?? null);
+            }
+
             if (status && status !== 'todos') {
                 query = query.where('sol.sol_status', status);
             }

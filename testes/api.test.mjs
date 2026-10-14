@@ -730,3 +730,20 @@ test('J1 atividades da unidade: lista, filtros e escopo do posto', async () => {
   const norte = await request(app).get('/atividades').query({ porPagina: 100 }).set(auth(tk.admNorte));
   assert.ok(norte.body.itens.every((i) => i.pos_nome === 'Posto Norte'));
 });
+
+test('K1 agendamentos: admin de posto vê e age só no próprio posto; universal vê todos', async () => {
+  const norte = await request(app).get('/agendamentos').query({ status: 'todos' }).set(auth(tk.admNorte));
+  assert.equal(norte.status, 200);
+  assert.ok(norte.body.every((a) => a.posto.pos_id === ids.posto2), 'Norte não vê agendamentos do Centro');
+  const centro = await request(app).get('/agendamentos').query({ status: 'todos' }).set(auth(tk.adm));
+  assert.ok(centro.body.length > 0 && centro.body.every((a) => a.posto.pos_id === ids.posto1));
+  const universal = await request(app).get('/agendamentos').query({ status: 'todos' }).set(auth(tk.admMesmoId));
+  assert.ok(universal.body.length >= centro.body.length, 'universal vê todos');
+
+  const novo = await request(app).post('/agendamentos').set(auth(tk.adm)).send(novoAg({ sol_origem_id: undefined }));
+  const id = novo.body.sol_id;
+  assert.equal((await request(app).patch(`/agendamentos/${id}/cancelar`).set(auth(tk.admNorte)).send({ motivo: 'x' })).status, 403);
+  assert.equal((await request(app).patch(`/agendamentos/${id}/recado`).set(auth(tk.admNorte)).send({ recado: 'x' })).status, 403);
+  assert.equal((await request(app).patch(`/agendamentos/${id}/concluir`).set(auth(tk.admNorte))).status, 403);
+  assert.equal((await knex('solicitacao').where('sol_id', id).first()).sol_status, 'agendado');
+});
