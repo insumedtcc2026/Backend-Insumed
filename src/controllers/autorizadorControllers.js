@@ -5,6 +5,7 @@ import {
   validarConfirmacaoSenha, validarCPF, validarEmail, validarNome, validarSenha,
   validarMotivo, validarTelefone, whereCpf,
 } from '../utils/validacoes.js';
+import { ACOES, registrarHistorico } from '../utils/historico.js';
 
 export default {
 
@@ -370,13 +371,27 @@ const motivoSalvo =
 
 // UPDATE condicional: se outro autorizador decidiu no meio tempo,
 // nenhuma linha muda e a segunda decisão é recusada.
-const alteradas = await knex("solicitacao")
-    .where("sol_id", id)
-    .whereIn("sol_status", ["Aprovado", "Revisado"])
-    .update({
-        sol_status,
-        sol_motivo_nao_autorizado: motivoSalvo,
-    });
+const alteradas = await knex.transaction(async (trx) => {
+    const n = await trx("solicitacao")
+        .where("sol_id", id)
+        .whereIn("sol_status", ["Aprovado", "Revisado"])
+        .update({
+            sol_status,
+            sol_motivo_nao_autorizado: motivoSalvo,
+        });
+
+    // assinatura de quem decidiu, na mesma transação
+    if (n) {
+        await registrarHistorico(trx, req.session, {
+            sol_id: Number(id),
+            acao: sol_status === "Autorizado" ? ACOES.AUTORIZADA : ACOES.NAO_AUTORIZADA,
+            de: solicitacao.sol_status,
+            para: sol_status,
+            detalhe: motivoSalvo,
+        });
+    }
+    return n;
+});
 
 if (!alteradas) {
     return res.status(409).json({

@@ -1,5 +1,8 @@
 import knex from '../database/index.js';
 import { dataHojeBrasil, validarDataISO, validarMotivo } from '../utils/validacoes.js';
+import { ACOES, registrarHistorico } from '../utils/historico.js';
+
+const TAMANHO_MAX_RECADO = 300;
 
 // Monta o protocolo de atendimento a partir do sol_id, ex: sol_id 42 -> "AG000042"
 function gerarProtocolo(sol_id) {
@@ -22,6 +25,7 @@ function agruparPorAgendamento(resultado) {
                 sol_motivo_cancelamento: linha.sol_motivo_cancelamento ?? null,
                 sol_data_cancelamento: linha.sol_data_cancelamento ?? null,
                 sol_origem_id: linha.sol_origem_id ?? null,
+                sol_recado: linha.sol_recado ?? null,
 
                 paciente: {
                     pac_id: linha.pac_id,
@@ -32,7 +36,9 @@ function agruparPorAgendamento(resultado) {
 
                 posto: {
                     pos_id: linha.pos_id,
-                    pos_nome: linha.pos_nome
+                    pos_nome: linha.pos_nome,
+                    pos_endereco: linha.pos_endereco ?? null,
+                    pos_whatsapp: linha.pos_whatsapp ?? null
                 },
 
                 insumos: []
@@ -61,6 +67,7 @@ const SELECT_AGENDAMENTO = [
     'sol.sol_motivo_cancelamento',
     'sol.sol_data_cancelamento',
     'sol.sol_origem_id',
+    'sol.sol_recado',
 
     'pac.pac_id',
     'pac.pac_nome',
@@ -69,6 +76,8 @@ const SELECT_AGENDAMENTO = [
 
     'pos.pos_id',
     'pos.pos_nome',
+    'pos.pos_endereco',
+    'pos.pos_whatsapp',
 
     'ins.ins_id',
     'ins.ins_nome',
@@ -161,14 +170,14 @@ export default {
 
             // --- compatibilidade com o formato antigo (hoje / exceto hoje) ---
             if (data === 'hoje') {
-                query = query.whereRaw('sol.sol_data_de_coleta = CURRENT_DATE');
+                query = query.where('sol.sol_data_de_coleta', dataHojeBrasil());
             }
             if (excluir_data === 'hoje') {
-                query = query.whereRaw('sol.sol_data_de_coleta != CURRENT_DATE');
+                query = query.whereNot('sol.sol_data_de_coleta', dataHojeBrasil());
             }
 
             if (order === 'proximidade') {
-                query = query.orderByRaw('ABS(sol.sol_data_de_coleta - CURRENT_DATE)');
+                query = query.orderByRaw('ABS(sol.sol_data_de_coleta - ?::date)', [dataHojeBrasil()]);
             } else {
                 query = query.orderBy('sol.sol_data_de_coleta', 'asc');
             }
@@ -251,7 +260,7 @@ export default {
                 return falhar(404, 'Paciente não encontrado');
             }
 
-            const postoExiste = await trx('postosdesaude').where('pos_id', pos_id).first('pos_id');
+            const postoExiste = await trx('postosdesaude').where('pos_id', pos_id).first('pos_id', 'pos_nome');
             if (!postoExiste) {
                 return falhar(404, 'Posto de coleta não encontrado');
             }
@@ -357,6 +366,18 @@ export default {
 
             await trx('coleta').insert(linhasColeta);
 
+            // histórico: no agendamento e, se houver, na prescrição de origem
+            const detalheAgendamento =
+                `${protocolo} · coleta em ${sol_data_de_coleta.split('-').reverse().join('/')} · ${postoExiste.pos_nome}`;
+            await registrarHistorico(trx, req.session, {
+                sol_id, acao: ACOES.AGENDADA, para: 'agendado', detalhe: detalheAgendamento,
+            });
+            if (origemId) {
+                await registrarHistorico(trx, req.session, {
+                    sol_id: origemId, acao: ACOES.AGENDADA, de: 'Autorizado', para: 'Autorizado', detalhe: detalheAgendamento,
+                });
+            }
+
             await trx.commit();
 
             return res.status(201).send({
@@ -405,7 +426,7 @@ export default {
                 .where('sol_id', id)
                 .whereIn('sol_status', STATUS_AGENDAMENTO)
                 .forUpdate()
-                .first('sol_id', 'sol_status');
+                .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_origem_id');
 
             if (!solicitacao) {
                 return falhar(404, { message: 'Agendamento não encontrado' });
@@ -425,6 +446,7 @@ export default {
                 return falhar(400, { message: 'Nenhum insumo encontrado para esta coleta.' });
             }
 
+            const nomesInsumo = new Map();
             for (const item of itensColeta) {
                 const insumo = await trx('insumo')
                     .where('ins_id', item.ins_id)
@@ -434,6 +456,7 @@ export default {
                 if (!insumo) {
                     return falhar(404, { message: `Insumo ${item.ins_id} não encontrado.` });
                 }
+                nomesInsumo.set(item.ins_id, insumo.ins_nome);
 
                 const estoqueAtual = Number(insumo.ins_quantidade);
                 const quantidadeRetirada = Number(item.quantidade);
@@ -459,6 +482,17 @@ export default {
             await trx('solicitacao')
                 .where('sol_id', id)
                 .update({ sol_status: 'concluido' });
+
+            const entregues = itensColeta.map((i) => `${i.quantidade}x ${nomesInsumo.get(i.ins_id) ?? 'insumo ' + i.ins_id}`).join(', ');
+            const detalheColeta = `${solicitacao.sol_protocolo ?? 'Agendamento ' + id} · ${entregues}`;
+            await registrarHistorico(trx, req.session, {
+                sol_id: Number(id), acao: ACOES.CONCLUIDA, de: 'agendado', para: 'concluido', detalhe: detalheColeta,
+            });
+            if (solicitacao.sol_origem_id) {
+                await registrarHistorico(trx, req.session, {
+                    sol_id: solicitacao.sol_origem_id, acao: ACOES.CONCLUIDA, de: 'Autorizado', para: 'Autorizado', detalhe: detalheColeta,
+                });
+            }
 
             await trx.commit();
 
@@ -493,16 +527,31 @@ export default {
                 return res.status(400).send({ message: erroMotivo });
             }
 
-            const [cancelado] = await knex('solicitacao')
-                .where('sol_id', id)
-                .where('sol_status', 'agendado')
-                .update({
-                    sol_status: 'cancelado',
-                    sol_motivo_cancelamento: motivo.trim(),
-                    sol_data_cancelamento: knex.fn.now(),
-                    sol_cancelado_por: req.session?.id ?? null
-                })
-                .returning(['sol_id', 'sol_status', 'sol_motivo_cancelamento', 'sol_data_cancelamento']);
+            const cancelado = await knex.transaction(async (trx) => {
+                const [linha] = await trx('solicitacao')
+                    .where('sol_id', id)
+                    .where('sol_status', 'agendado')
+                    .update({
+                        sol_status: 'cancelado',
+                        sol_motivo_cancelamento: motivo.trim(),
+                        sol_data_cancelamento: trx.fn.now(),
+                        sol_cancelado_por: req.session?.id ?? null
+                    })
+                    .returning(['sol_id', 'sol_status', 'sol_motivo_cancelamento', 'sol_data_cancelamento', 'sol_protocolo', 'sol_origem_id']);
+
+                if (linha) {
+                    const detalhe = `${linha.sol_protocolo ?? 'Agendamento ' + id} · Motivo: ${motivo.trim()}`;
+                    await registrarHistorico(trx, req.session, {
+                        sol_id: Number(id), acao: ACOES.CANCELADA, de: 'agendado', para: 'cancelado', detalhe,
+                    });
+                    if (linha.sol_origem_id) {
+                        await registrarHistorico(trx, req.session, {
+                            sol_id: linha.sol_origem_id, acao: ACOES.CANCELADA, de: 'Autorizado', para: 'Autorizado', detalhe,
+                        });
+                    }
+                }
+                return linha;
+            });
 
             if (!cancelado) {
                 const atual = await knex('solicitacao')
@@ -532,6 +581,52 @@ export default {
             return res.status(500).send({
                 message: 'Erro ao cancelar agendamento'
             });
+        }
+    },
+
+    // RECADO DO ADMIN NO AGENDAMENTO (ex.: "traga documento com foto").
+    // Aparece para o paciente no card e no comprovante. Texto vazio apaga.
+    async salvarRecado(req, res) {
+        try {
+            const { id } = req.params;
+            const bruto = req.body?.recado;
+
+            if (bruto != null && typeof bruto !== 'string') {
+                return res.status(400).send({ message: 'Recado inválido' });
+            }
+
+            const recado = (bruto ?? '').trim();
+            if (recado.length > TAMANHO_MAX_RECADO) {
+                return res.status(400).send({ message: `O recado deve ter no máximo ${TAMANHO_MAX_RECADO} caracteres` });
+            }
+
+            const resultado = await knex.transaction(async (trx) => {
+                const [linha] = await trx('solicitacao')
+                    .where('sol_id', id)
+                    .where('sol_status', 'agendado')
+                    .update({ sol_recado: recado || null })
+                    .returning(['sol_id', 'sol_recado']);
+
+                if (linha) {
+                    await registrarHistorico(trx, req.session, {
+                        sol_id: Number(id), acao: ACOES.RECADO, detalhe: recado || 'Recado removido',
+                    });
+                }
+                return linha;
+            });
+
+            if (!resultado) {
+                const existe = await knex('solicitacao').where('sol_id', id).whereIn('sol_status', STATUS_AGENDAMENTO).first('sol_status');
+                return existe
+                    ? res.status(409).send({ message: 'Só é possível deixar recado em agendamentos ainda não realizados.' })
+                    : res.status(404).send({ message: 'Agendamento não encontrado' });
+            }
+
+            return res.status(200).send({ message: recado ? 'Recado salvo' : 'Recado removido', sol_recado: resultado.sol_recado });
+
+        } catch (error) {
+            console.error('Erro ao salvar recado:', error);
+            return res.status(500).send({ message: 'Erro ao salvar o recado' });
         }
     },
 
@@ -585,7 +680,8 @@ export default {
             const resultado = await baseQueryAgendamentos()
                 .where('sol.pac_id', req.session.id)
                 .where('sol.sol_status', 'agendado')
-                .whereRaw('sol.sol_data_de_coleta >= CURRENT_DATE')
+                // "hoje" no fuso de Brasília (o banco roda em UTC)
+                .where('sol.sol_data_de_coleta', '>=', dataHojeBrasil())
                 .orderBy('sol.sol_data_de_coleta', 'asc');
 
             const agendamentos = agruparPorAgendamento(resultado);

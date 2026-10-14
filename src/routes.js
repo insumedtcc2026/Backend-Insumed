@@ -111,6 +111,7 @@ routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControll
 routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, 
 agendamentosControllers.concluir);
 routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, agendamentosControllers.cancelar);
+routes.patch('/agendamentos/:id/recado', authorization, autorizarAdmin, agendamentosControllers.salvarRecado);
 
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);
@@ -150,6 +151,16 @@ routes.get(
   solicitacaoControllers.buscarSolicitacaoPorId
 );
 
+
+// transferir prescrição em andamento ou agendamento para outra unidade
+routes.patch(
+  "/solicitacao/:id/transferir",
+  authorization, autorizarAdmin, validarAcessoSolicitacao,
+  solicitacaoControllers.transferirUnidade
+);
+
+// histórico (quem fez o quê); o controller confere o perfil e a posse
+routes.get("/solicitacao/:id/historico", authorization, solicitacaoControllers.historico);
 
 routes.patch(
   "/solicitacao/:id/reenvio",

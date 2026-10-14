@@ -1,10 +1,22 @@
 import knex from './../database/index.js';
-import { dataHojeBrasil, idValido, validarDataISO } from '../utils/validacoes.js';
+import { dataHojeBrasil, idValido, validarDataISO, validarMotivo } from '../utils/validacoes.js';
+import { ACOES, linhaDoTempo, registrarHistorico } from '../utils/historico.js';
 
 // Mesmo limite do formulário de envio (EnviarSolicitacao.tsx)
 const TAMANHO_MAX_PRESCRICAO = 5 * 1024 * 1024;
 const TAMANHO_MAX_OBSERVACAO = 1000;
 const REGEX_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+// Prescrições em andamento e agendamentos ainda não realizados
+const STATUS_TRANSFERIVEIS = ["Pendente", "Revisado", "Autorizado", "agendado"];
+
+// Textos dos motivos de reenvio (mesmos da tela do admin)
+const MOTIVOS_REENVIO = {
+    FOTO_SEM_QUALIDADE: "Foto sem qualidade",
+    PRESCRICAO_VENCIDA: "Prescrição vencida",
+    INFORMACAO_DIFERENTE: "Informação diferente",
+    OUTRO: "Outro motivo",
+};
 
 // O formulário aceita "image/*,.pdf"
 const tipoPrescricaoPermitido = (tipo) =>
@@ -85,8 +97,8 @@ export default {
             });
         }
 
-        const [solicitacao] =
-            await knex('solicitacao')
+        const solicitacao = await knex.transaction(async (trx) => {
+            const [nova] = await trx('solicitacao')
                 .insert({
                     pac_id: pac_id,
                     pos_id: Number(pos_id),
@@ -104,6 +116,13 @@ export default {
                     'sol_status',
                     'sol_observacao'
                 ]);
+
+            await registrarHistorico(trx, req.session, {
+                sol_id: nova.sol_id, acao: ACOES.ENVIADA, para: 'Pendente',
+            });
+
+            return nova;
+        });
 
         return res.status(201).json({
             message: 'Solicitação enviada com sucesso',
@@ -379,7 +398,7 @@ async alterarStatus(req, res) {
             });
         }
 
-        const insumo = await knex("insumo").where("ins_id", Number(ins_id)).first("ins_id");
+        const insumo = await knex("insumo").where("ins_id", Number(ins_id)).first("ins_id", "ins_nome");
 
         if (!insumo) {
             return res.status(404).json({
@@ -389,15 +408,25 @@ async alterarStatus(req, res) {
 
         // UPDATE condicional: só sai de "Pendente". Duas revisões
         // simultâneas não sobrescrevem uma à outra.
-        const quantidadeAtualizada = await knex("solicitacao")
-            .where("sol_id", id)
-            .where("sol_status", "Pendente")
-            .update({
-                sol_status,
-                sol_data_vencimento,
-                ins_id: Number(ins_id),
-                sol_insumo_quant: quantidade
-            });
+        const quantidadeAtualizada = await knex.transaction(async (trx) => {
+            const n = await trx("solicitacao")
+                .where("sol_id", id)
+                .where("sol_status", "Pendente")
+                .update({
+                    sol_status,
+                    sol_data_vencimento,
+                    ins_id: Number(ins_id),
+                    sol_insumo_quant: quantidade
+                });
+
+            if (n) {
+                await registrarHistorico(trx, req.session, {
+                    sol_id: Number(id), acao: ACOES.REVISADA, de: "Pendente", para: "Revisado",
+                    detalhe: `${quantidade}x ${insumo.ins_nome} · vence em ${sol_data_vencimento.split("-").reverse().join("/")}`,
+                });
+            }
+            return n;
+        });
 
         if (!quantidadeAtualizada) {
             const existe = await knex("solicitacao").where("sol_id", id).first("sol_status");
@@ -577,18 +606,28 @@ async pedirReenvio(req, res) {
     }
 
     // Só prescrições ainda não analisadas (Pendente) podem voltar para o paciente.
-    const [solicitacao] = await knex("solicitacao")
-      .where("sol_id", id)
-      .where("sol_status", "Pendente")
-      .update({
-        sol_status: "Reenvio",
-        sol_motivo_reenvio: motivo
-      })
-      .returning([
-        "sol_id",
-        "sol_status",
-        "sol_motivo_reenvio"
-      ]);
+    const solicitacao = await knex.transaction(async (trx) => {
+      const [alterada] = await trx("solicitacao")
+        .where("sol_id", id)
+        .where("sol_status", "Pendente")
+        .update({
+          sol_status: "Reenvio",
+          sol_motivo_reenvio: motivo
+        })
+        .returning([
+          "sol_id",
+          "sol_status",
+          "sol_motivo_reenvio"
+        ]);
+
+      if (alterada) {
+        await registrarHistorico(trx, req.session, {
+          sol_id: alterada.sol_id, acao: ACOES.REENVIO, de: "Pendente", para: "Reenvio",
+          detalhe: MOTIVOS_REENVIO[motivo] ?? motivo,
+        });
+      }
+      return alterada;
+    });
 
     if (!solicitacao) {
       const existe = await knex("solicitacao").where("sol_id", id).first("sol_status");
@@ -619,6 +658,114 @@ async pedirReenvio(req, res) {
     return res.status(500).json({
       error: "Erro ao pedir reenvio"
     });
+  }
+},
+
+// TRANSFERIR PARA OUTRA UNIDADE (admin)
+//
+// Vale para prescrições ainda em andamento (Pendente, Revisado,
+// Autorizado) e para agendamentos ainda não realizados (agendado).
+// O motivo é obrigatório e fica no histórico, com quem transferiu.
+async transferirUnidade(req, res) {
+  try {
+    const { id } = req.params;
+    const { pos_id, motivo } = req.body ?? {};
+
+    if (!idValido(pos_id)) {
+      return res.status(400).json({ error: "Selecione a unidade de destino" });
+    }
+
+    const erroMotivo = validarMotivo(motivo, "da transferência");
+    if (erroMotivo) {
+      return res.status(400).json({ error: erroMotivo });
+    }
+
+    const destino = await knex("postosdesaude").where("pos_id", Number(pos_id)).first("pos_id", "pos_nome");
+    if (!destino) {
+      return res.status(404).json({ error: "Unidade de destino não encontrada" });
+    }
+
+    const resultado = await knex.transaction(async (trx) => {
+      const atual = await trx("solicitacao as sol")
+        .leftJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
+        .where("sol.sol_id", id)
+        .forUpdate()
+        .first("sol.sol_id", "sol.sol_status", "sol.pos_id", "pos.pos_nome");
+
+      if (!atual) return { status: 404, corpo: { error: "Solicitação não encontrada" } };
+
+      if (!STATUS_TRANSFERIVEIS.includes(atual.sol_status)) {
+        return {
+          status: 409,
+          corpo: { error: "Só é possível transferir prescrições em andamento ou agendamentos ainda não realizados." },
+        };
+      }
+
+      if (Number(atual.pos_id) === Number(destino.pos_id)) {
+        return { status: 400, corpo: { error: "A solicitação já está nesta unidade" } };
+      }
+
+      await trx("solicitacao").where("sol_id", id).update({ pos_id: destino.pos_id });
+
+      await registrarHistorico(trx, req.session, {
+        sol_id: Number(id),
+        acao: ACOES.TRANSFERIDA,
+        de: atual.sol_status,
+        para: atual.sol_status,
+        detalhe: `De ${atual.pos_nome ?? "unidade não informada"} para ${destino.pos_nome}. Motivo: ${motivo.trim()}`,
+      });
+
+      return {
+        status: 200,
+        corpo: { message: `Transferido para ${destino.pos_nome}`, pos_id: destino.pos_id, pos_nome: destino.pos_nome },
+      };
+    });
+
+    return res.status(resultado.status).json(resultado.corpo);
+
+  } catch (error) {
+    console.error("Erro ao transferir de unidade:", error);
+    return res.status(500).json({ error: "Erro ao transferir de unidade" });
+  }
+},
+
+// HISTÓRICO ("quem fez o quê") de uma solicitação/agendamento.
+// Admin e autorizador veem os nomes; o paciente vê só os próprios itens
+// e o papel de quem fez (não o nome do servidor).
+async historico(req, res) {
+  try {
+    const { id } = req.params;
+    const sessao = req.session;
+
+    const solicitacao = await knex("solicitacao")
+      .where("sol_id", id)
+      .first("sol_id", "pac_id", "pos_id", "sol_origem_id");
+
+    if (!solicitacao) {
+      return res.status(404).json({ error: "Solicitação não encontrada" });
+    }
+
+    if (sessao.tipo === "PACIENTE" && Number(solicitacao.pac_id) !== Number(sessao.id)) {
+      return res.status(403).json({ error: "Esta solicitação não é sua" });
+    }
+
+    if (sessao.tipo === "ADMIN" && !sessao.tp_universal && Number(sessao.posto_id) !== Number(solicitacao.pos_id)) {
+      return res.status(403).json({ error: "Acesso negado: solicitação de outro posto" });
+    }
+
+    // agendamento criado a partir de uma prescrição: mostra também o
+    // histórico da prescrição de origem (e vice-versa, os agendamentos dela)
+    const relacionados = await knex("solicitacao")
+      .where("sol_origem_id", solicitacao.sol_id)
+      .pluck("sol_id");
+    const ids = [solicitacao.sol_id, solicitacao.sol_origem_id, ...relacionados].filter(Boolean);
+
+    const eventos = await linhaDoTempo(ids, { ocultarNomesDaEquipe: sessao.tipo === "PACIENTE" });
+    return res.status(200).json(eventos);
+
+  } catch (error) {
+    console.error("Erro ao buscar histórico:", error);
+    return res.status(500).json({ error: "Erro ao buscar o histórico" });
   }
 },
 };

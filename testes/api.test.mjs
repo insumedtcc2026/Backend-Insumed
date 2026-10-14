@@ -38,7 +38,7 @@ db.public.none(`
 
 // aplica a migração entregue para o Neon (sem BEGIN/COMMIT, que o pg-mem não precisa)
 const migracao = fs.readFileSync(
-  path.join(BACKEND, 'database/migracoes/2026-10-13_cancelamento_e_origem_agendamento.sql'), 'utf8')
+  path.join(BACKEND, 'database/migracoes/2026-10-13_melhorias_insumed.sql'), 'utf8')
   .replace(/^\s*(BEGIN|COMMIT);\s*$/gm, '')
   .replace(/^--.*$/gm, '');
 db.public.none(migracao);
@@ -587,4 +587,83 @@ test('G5 ficha do paciente para o admin; busca por nome', async () => {
   const porNome = await request(app).get('/pacientes').query({ busca: 'bruno' }).set(auth(tk.adm));
   assert.equal(porNome.body[0].pac_nome, 'Bruno Lima');
   assert.deepEqual((await request(app).get('/pacientes').query({ busca: '' }).set(auth(tk.adm))).body, []);
+});
+
+// ------------------------------------------------------------------
+// Fase 3 — histórico (assinatura), transferência, recado, WhatsApp do posto
+// ------------------------------------------------------------------
+test('H1 histórico registra quem fez cada etapa, com nome (visão da equipe)', async () => {
+  const r = await request(app).get(`/solicitacao/${ids.sol1}/historico`).set(auth(tk.adm));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const acoes = r.body.map((e) => e.acao);
+  for (const a of ['enviada', 'revisada', 'autorizada', 'agendada', 'cancelada', 'concluida']) {
+    assert.ok(acoes.includes(a), `faltou "${a}" em ${acoes.join(',')}`);
+  }
+  const enviada = r.body.find((e) => e.acao === 'enviada');
+  assert.equal(enviada.usuario_tipo, 'PACIENTE');
+  assert.equal(enviada.usuario_nome, 'Ana Souza');
+  const autorizada = r.body.find((e) => e.acao === 'autorizada');
+  assert.equal(autorizada.usuario_tipo, 'AUTORIZADOR');
+  assert.equal(autorizada.usuario_nome, 'Carla Dias');
+  const revisada = r.body.find((e) => e.acao === 'revisada');
+  assert.equal(revisada.usuario_tipo, 'ADMIN');
+  assert.match(revisada.detalhe, /2x Fralda G/);
+  const cancelada = r.body.find((e) => e.acao === 'cancelada');
+  assert.match(cancelada.detalhe, /Paciente pediu para remarcar/);
+});
+
+test('H2 paciente vê o histórico só dos próprios itens, sem o nome da equipe', async () => {
+  const r = await request(app).get(`/solicitacao/${ids.sol1}/historico`).set(auth(tk.pacA));
+  assert.equal(r.status, 200);
+  assert.ok(r.body.filter((e) => e.usuario_tipo !== 'PACIENTE').every((e) => e.usuario_nome === null));
+  assert.ok(r.body.some((e) => e.usuario_tipo === 'PACIENTE' && e.usuario_nome === 'Ana Souza'));
+  assert.equal((await request(app).get(`/solicitacao/${ids.sol1}/historico`).set(auth(tk.pacB))).status, 403);
+  assert.equal((await request(app).get(`/solicitacao/${ids.sol1}/historico`)).status, 401);
+  assert.equal((await request(app).get(`/solicitacao/${ids.sol1}/historico`).set(auth(tk.admNorte))).status, 403);
+});
+
+test('H3 transferência de unidade: motivo obrigatório, regras de status e histórico', async () => {
+  const [p] = await knex('solicitacao').insert({ pac_id: ids.pacA, pos_id: ids.posto1, sol_status: 'Pendente', sol_insumo_quant: 0 }).returning('sol_id');
+  const url = `/solicitacao/${p.sol_id}/transferir`;
+  assert.equal((await request(app).patch(url).set(auth(tk.adm)).send({ pos_id: ids.posto2 })).status, 400, 'sem motivo');
+  assert.equal((await request(app).patch(url).set(auth(tk.adm)).send({ pos_id: ids.posto1, motivo: 'x' })).status, 400, 'mesma unidade');
+  assert.equal((await request(app).patch(url).set(auth(tk.adm)).send({ pos_id: 999, motivo: 'x' })).status, 404);
+  assert.equal((await request(app).patch(url).set(auth(tk.admNorte)).send({ pos_id: ids.posto2, motivo: 'x' })).status, 403, 'admin de outro posto');
+  assert.equal((await request(app).patch(url).set(auth(tk.pacA)).send({ pos_id: ids.posto2, motivo: 'x' })).status, 403);
+
+  const ok = await request(app).patch(url).set(auth(tk.adm)).send({ pos_id: ids.posto2, motivo: 'Paciente mudou de bairro' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal((await knex('solicitacao').where('sol_id', p.sol_id).first()).pos_id, ids.posto2);
+  const hist = (await request(app).get(`/solicitacao/${p.sol_id}/historico`).set(auth(tk.admNorte))).body;
+  const t = hist.find((e) => e.acao === 'transferida');
+  assert.match(t.detalhe, /De Posto Centro para Posto Norte\. Motivo: Paciente mudou de bairro/);
+
+  // agendamento já concluído não pode ser transferido
+  const concl = await request(app).patch(`/solicitacao/${ids.ag2}/transferir`).set(auth(tk.adm)).send({ pos_id: ids.posto2, motivo: 'x' });
+  assert.equal(concl.status, 409);
+});
+
+test('H4 recado no agendamento: salva, aparece para o paciente, só em agendado', async () => {
+  const novo = await request(app).post('/agendamentos').set(auth(tk.adm)).send(novoAg({ sol_origem_id: undefined }));
+  const id = novo.body.sol_id;
+  assert.equal((await request(app).patch(`/agendamentos/${id}/recado`).set(auth(tk.adm)).send({ recado: 'x'.repeat(301) })).status, 400);
+  assert.equal((await request(app).patch(`/agendamentos/${id}/recado`).set(auth(tk.pacA)).send({ recado: 'oi' })).status, 403);
+  const ok = await request(app).patch(`/agendamentos/${id}/recado`).set(auth(tk.adm)).send({ recado: '  Traga documento com foto  ' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const meus = await request(app).get('/meus-agendamentos').query({ porPagina: 50 }).set(auth(tk.pacA));
+  assert.equal(meus.body.itens.find((a) => a.sol_id === id).sol_recado, 'Traga documento com foto');
+  const hist = (await request(app).get(`/solicitacao/${id}/historico`).set(auth(tk.adm))).body;
+  assert.ok(hist.some((e) => e.acao === 'recado' && e.detalhe === 'Traga documento com foto'));
+  // apagar
+  assert.equal((await request(app).patch(`/agendamentos/${id}/recado`).set(auth(tk.adm)).send({ recado: '' })).body.sol_recado, null);
+  // concluído não aceita recado
+  assert.equal((await request(app).patch(`/agendamentos/${ids.ag2}/recado`).set(auth(tk.adm)).send({ recado: 'oi' })).status, 409);
+});
+
+test('H5 agendamento traz endereço e WhatsApp do posto (quando cadastrado)', async () => {
+  await knex('postosdesaude').where('pos_id', ids.posto1).update({ pos_whatsapp: '5524999990000', pos_endereco: 'Rua Central, 100' });
+  const meus = await request(app).get('/meus-agendamentos').query({ porPagina: 50 }).set(auth(tk.pacA));
+  const ag = meus.body.itens.find((a) => a.posto.pos_id === ids.posto1);
+  assert.equal(ag.posto.pos_whatsapp, '5524999990000');
+  assert.equal(ag.posto.pos_endereco, 'Rua Central, 100');
 });
