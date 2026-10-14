@@ -1,8 +1,9 @@
 import knex from '../database/index.js';
 import {
   coletarErros, dataHojeBrasil, formatarTelefone, normalizarEmail, normalizarNome,
-  validarEmail, validarNome, validarTelefone,
+  validarDataISO, validarEmail, validarNome, validarTelefone,
 } from '../utils/validacoes.js';
+import { ACOES } from '../utils/historico.js';
 
 // Insumo com quantidade até este valor aparece como "estoque baixo" no painel.
 export const LIMITE_ESTOQUE_BAIXO = 5;
@@ -213,6 +214,84 @@ export default {
     } catch (error) {
       console.error('Erro ao sugerir datas:', error);
       return res.status(500).json({ message: 'Erro ao sugerir datas' });
+    }
+  },
+
+  // ATIVIDADES DA UNIDADE: tudo o que foi registrado no histórico
+  // (quem revisou, autorizou, agendou, entregou, transferiu...), do mais
+  // recente para o mais antigo, com filtros. Admin de posto vê só o seu.
+  async atividades(req, res) {
+    try {
+      const admin = req.session;
+      const { data_inicio, data_fim, acao, usuario, busca } = req.query;
+      const page = Math.max(1, Number(req.query.page) || 1);
+      const porPagina = Math.min(Math.max(Number(req.query.porPagina) || 30, 1), 100);
+
+      if ((data_inicio && validarDataISO(data_inicio)) || (data_fim && validarDataISO(data_fim))) {
+        return res.status(400).json({ error: 'Intervalo de datas inválido' });
+      }
+      if (data_inicio && data_fim && data_inicio > data_fim) {
+        return res.status(400).json({ error: 'A data inicial não pode ser maior que a data final' });
+      }
+      if (acao && !Object.values(ACOES).includes(acao)) {
+        return res.status(400).json({ error: 'Tipo de atividade inválido' });
+      }
+
+      const base = knex('historico_solicitacao as h')
+        .join('solicitacao as s', 's.sol_id', 'h.sol_id')
+        .leftJoin('pacientes as p', 'p.pac_id', 's.pac_id')
+        .leftJoin('postosdesaude as pos', 'pos.pos_id', 's.pos_id')
+        .modify(doPosto(admin, 's.pos_id'))
+        .modify((qb) => {
+          // datas no fuso de Brasília (UTC-3)
+          if (data_inicio) qb.where('h.his_criado_em', '>=', `${data_inicio}T00:00:00-03:00`);
+          if (data_fim) qb.where('h.his_criado_em', '<=', `${data_fim}T23:59:59.999-03:00`);
+          if (acao) qb.where('h.his_acao', acao);
+          if (usuario?.trim()) qb.whereILike('h.his_usuario_nome', `%${usuario.trim()}%`);
+          if (busca?.trim()) {
+            const termo = busca.trim();
+            qb.where((w) => w.whereILike('p.pac_nome', `%${termo}%`).orWhereILike('s.sol_protocolo', `%${termo}%`));
+          }
+        });
+
+      const total = await contar(base.clone());
+      const totalPaginas = Math.max(1, Math.ceil(total / porPagina));
+      const pagina = Math.min(page, totalPaginas);
+
+      const linhas = await base
+        .select(
+          'h.his_id', 'h.sol_id', 'h.his_acao', 'h.his_status_anterior', 'h.his_status_novo',
+          'h.his_detalhe', 'h.his_usuario_tipo', 'h.his_usuario_nome', 'h.his_criado_em',
+          's.sol_protocolo', 's.sol_status', 'p.pac_id', 'p.pac_nome', 'pos.pos_nome',
+        )
+        .orderBy([{ column: 'h.his_criado_em', order: 'desc' }, { column: 'h.his_id', order: 'desc' }])
+        .limit(porPagina)
+        .offset((pagina - 1) * porPagina);
+
+      return res.status(200).json({
+        total,
+        paginaAtual: pagina,
+        totalPaginas,
+        itens: linhas.map((h) => ({
+          his_id: h.his_id,
+          sol_id: h.sol_id,
+          acao: h.his_acao,
+          de: h.his_status_anterior,
+          para: h.his_status_novo,
+          detalhe: h.his_detalhe,
+          quando: h.his_criado_em,
+          usuario_tipo: h.his_usuario_tipo,
+          usuario_nome: h.his_usuario_nome,
+          protocolo: h.sol_protocolo,
+          status_atual: h.sol_status,
+          pac_id: h.pac_id,
+          pac_nome: h.pac_nome,
+          pos_nome: h.pos_nome,
+        })),
+      });
+    } catch (error) {
+      console.error('Erro ao listar atividades:', error);
+      return res.status(500).json({ error: 'Erro ao listar as atividades' });
     }
   },
 };

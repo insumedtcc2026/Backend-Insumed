@@ -700,3 +700,33 @@ test('I2 meus agendamentos: próximos (agendado, data crescente) e anteriores', 
   assert.ok(ant.body.itens.length >= 1 && ant.body.itens.every((a) => ['concluido', 'cancelado'].includes(a.status)));
   assert.equal((await request(app).get('/meus-agendamentos').query({ situacao: 'xyz' }).set(auth(tk.pacA))).status, 400);
 });
+
+// ------------------------------------------------------------------
+// Fase 5 — atividades da unidade
+// ------------------------------------------------------------------
+test('J1 atividades da unidade: lista, filtros e escopo do posto', async () => {
+  const r = await request(app).get('/atividades').set(auth(tk.adm));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.total > 0 && r.body.itens.length > 0);
+  const datas = r.body.itens.map((i) => new Date(i.quando).getTime());
+  assert.deepEqual(datas, [...datas].sort((a, b) => b - a), 'mais recente primeiro');
+  assert.ok(r.body.itens.every((i) => i.acao && 'usuario_nome' in i && 'pac_nome' in i));
+
+  const so = await request(app).get('/atividades').query({ acao: 'autorizada' }).set(auth(tk.adm));
+  assert.ok(so.body.itens.length > 0 && so.body.itens.every((i) => i.acao === 'autorizada'));
+  const quem = await request(app).get('/atividades').query({ usuario: 'carla' }).set(auth(tk.adm));
+  assert.ok(quem.body.itens.length > 0 && quem.body.itens.every((i) => /carla/i.test(i.usuario_nome)));
+  const paciente = await request(app).get('/atividades').query({ busca: 'Bruno' }).set(auth(tk.adm));
+  assert.ok(paciente.body.itens.every((i) => i.pac_nome === 'Bruno Lima'));
+  const futuro = await request(app).get('/atividades').query({ data_inicio: '2099-01-01' }).set(auth(tk.adm));
+  assert.equal(futuro.body.total, 0);
+
+  assert.equal((await request(app).get('/atividades').query({ acao: 'xyz' }).set(auth(tk.adm))).status, 400);
+  assert.equal((await request(app).get('/atividades').query({ data_inicio: '2026-02-30' }).set(auth(tk.adm))).status, 400);
+  assert.equal((await request(app).get('/atividades').set(auth(tk.aut))).status, 403);
+  assert.equal((await request(app).get('/atividades').set(auth(tk.pacA))).status, 403);
+
+  // admin do posto Norte só vê o que é do posto Norte
+  const norte = await request(app).get('/atividades').query({ porPagina: 100 }).set(auth(tk.admNorte));
+  assert.ok(norte.body.itens.every((i) => i.pos_nome === 'Posto Norte'));
+});

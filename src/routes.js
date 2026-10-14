@@ -54,6 +54,8 @@ routes.put('/perfil', authorization, autorizarAdminOuAut, painelControllers.atua
 
 // Home do admin (fila de trabalho)
 routes.get('/painel/admin', authorization, autorizarAdmin, painelControllers.painelAdmin);
+// atividades da unidade (histórico geral de quem fez o quê)
+routes.get('/atividades', authorization, autorizarAdmin, painelControllers.atividades);
 
 routes.post('/login', limiteLogin, administradorControllers.loginGeral)
 
