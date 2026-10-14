@@ -537,6 +537,7 @@ async buscarHistoricoPrescricoes(req, res) {
                 "sol.sol_data_vencimento",
                 "sol.sol_motivo_nao_autorizado",
                 "sol.sol_motivo_reenvio",
+                "sol.sol_insumo_quant",
                 "sol.sol_observacao",
                 "sol.sol_prescricao_tipo",
 
