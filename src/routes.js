@@ -138,6 +138,8 @@ routes.get(
   );
 
 routes.get("/solicitacao/pacienteid", authorization, autorizarPaciente, solicitacaoControllers.prescicaodopaciente);
+// prescrições do paciente com agendamento e linha do tempo (rastreio)
+routes.get("/minhas-prescricoes", authorization, autorizarPaciente, solicitacaoControllers.minhasPrescricoes);
 
 
 routes.get(

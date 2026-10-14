@@ -768,4 +768,63 @@ async historico(req, res) {
     return res.status(500).json({ error: "Erro ao buscar o histórico" });
   }
 },
+
+// MINHAS PRESCRIÇÕES (paciente) — base do rastreio "estilo entrega".
+// Cada prescrição vem com o agendamento mais recente feito a partir dela
+// e com a linha do tempo (sem o nome de quem fez na unidade).
+async minhasPrescricoes(req, res) {
+  try {
+    const pac_id = req.session.id;
+
+    const prescricoes = await knex("solicitacao as sol")
+      .leftJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
+      .leftJoin("insumo as ins", "ins.ins_id", "sol.ins_id")
+      .where("sol.pac_id", pac_id)
+      .whereNotIn("sol.sol_status", ["agendado", "concluido", "cancelado"])
+      .select(
+        "sol.sol_id", "sol.sol_status", "sol.sol_data_solicitacao", "sol.sol_data_vencimento",
+        "sol.sol_observacao", "sol.sol_prescricao_tipo", "sol.sol_insumo_quant",
+        "sol.sol_motivo_nao_autorizado", "sol.sol_motivo_reenvio",
+        "pos.pos_nome", "ins.ins_nome",
+        knex.raw("(sol.sol_prescricao IS NOT NULL) AS tem_prescricao"),
+      )
+      .orderBy("sol.sol_data_solicitacao", "desc")
+      .orderBy("sol.sol_id", "desc");
+
+    const ids = prescricoes.map((p) => p.sol_id);
+
+    const agendamentos = ids.length
+      ? await knex("solicitacao as ag")
+        .leftJoin("postosdesaude as pos", "pos.pos_id", "ag.pos_id")
+        .whereIn("ag.sol_origem_id", ids)
+        .where("ag.pac_id", pac_id)
+        .select(
+          "ag.sol_id", "ag.sol_origem_id", "ag.sol_status", "ag.sol_protocolo", "ag.sol_data_de_coleta",
+          "ag.sol_motivo_cancelamento", "ag.sol_recado", "pos.pos_nome", "pos.pos_endereco",
+        )
+        .orderBy("ag.sol_id", "desc")
+      : [];
+
+    const eventos = ids.length
+      ? await linhaDoTempo([...ids, ...agendamentos.map((a) => a.sol_id)], { ocultarNomesDaEquipe: true })
+      : [];
+
+    const resposta = prescricoes.map((p) => {
+      const doItem = agendamentos.filter((a) => a.sol_origem_id === p.sol_id);
+      const idsDoItem = new Set([p.sol_id, ...doItem.map((a) => a.sol_id)]);
+      return {
+        ...p,
+        // o mais recente (se o primeiro foi cancelado e houve reagendamento, vem o novo)
+        agendamento: doItem[0] ?? null,
+        eventos: eventos.filter((e) => idsDoItem.has(e.sol_id)),
+      };
+    });
+
+    return res.status(200).json(resposta);
+
+  } catch (error) {
+    console.error("Erro ao buscar minhas prescrições:", error);
+    return res.status(500).json({ error: "Erro ao buscar suas prescrições" });
+  }
+},
 };

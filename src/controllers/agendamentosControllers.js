@@ -642,9 +642,23 @@ export default {
             const porPagina = Math.min(Math.max(Number(req.query.porPagina) || 4, 1), 50);
             const offset = (page - 1) * porPagina;
 
-            const resultado = await baseQueryAgendamentos()
-                .where('sol.pac_id', req.session.id)
-                .orderBy('sol.sol_data_de_coleta', 'desc');
+            // ?situacao=proximos  -> só 'agendado', do mais próximo para o mais distante
+            // ?situacao=anteriores -> concluídos e cancelados, do mais recente
+            // (sem o parâmetro: todos, como antes)
+            const { situacao } = req.query;
+            if (situacao && !['proximos', 'anteriores'].includes(situacao)) {
+                return res.status(400).send({ message: 'Situação inválida' });
+            }
+
+            let consulta = baseQueryAgendamentos().where('sol.pac_id', req.session.id);
+            if (situacao === 'proximos') {
+                consulta = consulta.where('sol.sol_status', 'agendado').orderBy('sol.sol_data_de_coleta', 'asc');
+            } else if (situacao === 'anteriores') {
+                consulta = consulta.whereIn('sol.sol_status', ['concluido', 'cancelado']).orderBy('sol.sol_data_de_coleta', 'desc');
+            } else {
+                consulta = consulta.orderBy('sol.sol_data_de_coleta', 'desc');
+            }
+            const resultado = await consulta.orderBy('sol.sol_id', 'desc');
 
             const todosAgendamentos = agruparPorAgendamento(resultado);
 
@@ -654,7 +668,7 @@ export default {
             const inicio = (paginaValida - 1) * porPagina;
             const itens = todosAgendamentos.slice(inicio, inicio + porPagina);
 
-            return res.status(200).send({ itens, paginaAtual: paginaValida, totalPaginas });
+            return res.status(200).send({ itens, paginaAtual: paginaValida, totalPaginas, total });
 
         } catch (error) {
             console.error('Erro ao buscar meus agendamentos:', error);

@@ -667,3 +667,36 @@ test('H5 agendamento traz endereço e WhatsApp do posto (quando cadastrado)', as
   assert.equal(ag.posto.pos_whatsapp, '5524999990000');
   assert.equal(ag.posto.pos_endereco, 'Rua Central, 100');
 });
+
+// ------------------------------------------------------------------
+// Fase 4 — páginas do paciente (rastreio e meus agendamentos)
+// ------------------------------------------------------------------
+test('I1 minhas prescrições: agendamento vinculado e linha do tempo, sem nomes da equipe', async () => {
+  const r = await request(app).get('/minhas-prescricoes').set(auth(tk.pacA));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.every((p) => !['agendado', 'concluido', 'cancelado'].includes(p.sol_status)), 'só prescrições');
+  const p1 = r.body.find((p) => p.sol_id === ids.sol1);
+  assert.ok(p1, 'prescrição sol1 presente');
+  assert.ok(p1.agendamento, 'tem agendamento vinculado');
+  assert.ok(['agendado', 'concluido', 'cancelado'].includes(p1.agendamento.sol_status));
+  const acoes = p1.eventos.map((e) => e.acao);
+  for (const a of ['enviada', 'revisada', 'autorizada', 'agendada']) assert.ok(acoes.includes(a), a);
+  assert.ok(p1.eventos.filter((e) => e.usuario_tipo !== 'PACIENTE').every((e) => e.usuario_nome === null));
+  assert.ok(!('sol_prescricao' in p1), 'não devolve o arquivo na lista');
+  // outro paciente não vê
+  const b = await request(app).get('/minhas-prescricoes').set(auth(tk.pacB));
+  assert.ok(!b.body.some((p) => p.sol_id === ids.sol1));
+  assert.equal((await request(app).get('/minhas-prescricoes').set(auth(tk.adm))).status, 403);
+});
+
+test('I2 meus agendamentos: próximos (agendado, data crescente) e anteriores', async () => {
+  const prox = await request(app).get('/meus-agendamentos').query({ situacao: 'proximos', porPagina: 50 }).set(auth(tk.pacA));
+  assert.equal(prox.status, 200);
+  assert.ok(prox.body.itens.length >= 1 && prox.body.itens.every((a) => a.status === 'agendado'));
+  const datas = prox.body.itens.map((a) => String(a.sol_data_de_coleta).slice(0, 10));
+  assert.deepEqual(datas, [...datas].sort(), 'do mais próximo para o mais distante');
+  assert.equal(typeof prox.body.total, 'number');
+  const ant = await request(app).get('/meus-agendamentos').query({ situacao: 'anteriores', porPagina: 50 }).set(auth(tk.pacA));
+  assert.ok(ant.body.itens.length >= 1 && ant.body.itens.every((a) => ['concluido', 'cancelado'].includes(a.status)));
+  assert.equal((await request(app).get('/meus-agendamentos').query({ situacao: 'xyz' }).set(auth(tk.pacA))).status, 400);
+});
