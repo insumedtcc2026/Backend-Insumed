@@ -4,9 +4,10 @@ import {
   coletarErros, formatarCEP, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome,
   somenteDigitos, validarCEP, validarConfirmacaoSenha, validarCPF, validarDataNascimento,
   validarEmail, validarNome, validarObrigatorio, validarSenha, validarTelefone, whereCpf,
+  mensagemErroBanco, normalizarRaca, normalizarSexo,
 } from '../utils/validacoes.js';
+import { emailEmUso } from '../utils/contas.js';
 
-const RACA_NAO_INFORMADA = "Não informado";
 
 // Nunca devolver o hash da senha nas respostas da API.
 const semSenha = ({ pac_senha, ...resto }) => resto;
@@ -39,19 +40,11 @@ export default {
         cep,
       } = req.body ?? {};
 
-      const sexos = {
-        "masculino": "M",
-        "feminino": "F",
-        "outro": "O",
-        "prefiro não responder": "N",
-      };
-      // Gênero e cor/raça são opcionais. Vazio vira "não informado" (em vez
-      // de NULL, para não depender de a coluna aceitar nulo); se vier
-      // preenchido, precisa ser um valor válido.
-      const sexoInformado = String(sexo ?? "").trim();
-      const sexoFormatado = sexoInformado ? sexos[sexoInformado.toLowerCase()] : "N";
-      const racaInformada = typeof raca === "string" ? raca.trim() : "";
-      const racaFinal = racaInformada || RACA_NAO_INFORMADA;
+      // Gênero e cor/raça são opcionais: vazio vira "não informado" ("N" e
+      // "Não informado"). Se vier preenchido, precisa ser uma das opções do
+      // formulário (inclusive "Outro" e "Prefiro não responder").
+      const sexoFormatado = normalizarSexo(sexo);
+      const racaFinal = normalizarRaca(raca);
 
       // Valida todos os campos de uma vez para devolver todos os erros juntos.
       const erros = coletarErros(
@@ -61,7 +54,7 @@ export default {
         validarCPF(cpf),
         validarDataNascimento(data_nasc),
         sexoFormatado ? null : "Selecione um gênero válido.",
-        racaInformada.length > 30 ? "Cor/raça inválida." : null,
+        racaFinal ? null : "Selecione uma cor/raça válida.",
         validarCEP(cep),
         String(endereco ?? "").trim().length >= 5 ? null : "Informe o endereço completo.",
         validarSenha(senha),
@@ -74,10 +67,7 @@ export default {
 
       const emailNormalizado = normalizarEmail(email);
 
-      const emailExistente = await knex('pacientes')
-        .whereRaw('LOWER(pac_email) = ?', [emailNormalizado])
-        .first();
-      if (emailExistente) {
+      if (await emailEmUso(emailNormalizado)) {
         return res.status(409).json({ sucesso: false, erros: ["E-mail já cadastrado."] });
       }
 
@@ -114,6 +104,8 @@ export default {
 
     } catch (erro) {
       console.error("ERRO NO CADASTRO DE PACIENTE:", erro);
+      const doBanco = mensagemErroBanco(erro);
+      if (doBanco) return res.status(400).json({ sucesso: false, erros: [doBanco] });
       return res.status(500).json({ erro: "Erro ao cadastrar paciente. Tente novamente." });
     }
   },
@@ -162,6 +154,7 @@ export default {
             email: () => validarEmail(valor),
             telefone: () => validarTelefone(valor),
             endereco: () => String(valor).trim().length >= 5 ? null : "Informe o endereço completo.",
+            raca: () => normalizarRaca(valor) ? null : "Selecione uma cor/raça válida.",
         };
         const erroValidacao = validadores[campo]?.();
         if (erroValidacao) {
@@ -174,6 +167,7 @@ export default {
             cep: formatarCEP,
             email: normalizarEmail,
             telefone: formatarTelefone,
+            raca: normalizarRaca,
         };
         const valorFinal = formatadores[campo] ? formatadores[campo](valor) : String(valor).trim();
 
@@ -184,7 +178,9 @@ export default {
                     ? q.whereRaw("LOWER(pac_email) = ?", [valorFinal])
                     : q.whereRaw(...whereCpf("pac_cpf"), [somenteDigitos(valorFinal)]))
                 .first();
-            if (duplicado) {
+            const emOutroPerfil = campo === "email" &&
+                await emailEmUso(valorFinal, { tabela: "pacientes", filtro: (q) => q.where("pac_id", pacienteId) });
+            if (duplicado || emOutroPerfil) {
                 return res.status(409).json({
                     erro: campo === "email" ? "E-mail já cadastrado." : "CPF já cadastrado."
                 });

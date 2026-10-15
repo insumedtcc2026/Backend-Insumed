@@ -21,6 +21,8 @@ process.env.NODE_ENV = 'test';
 const db = newDb();
 // pg-mem não traz REPLACE(); o Postgres/Neon tem nativamente
 db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], returns: 'text', implementation: (a, b, c) => a == null ? null : a.split(b).join(c) });
+// REGEXP_REPLACE(texto, padrão, troca, 'g') usado na matrícula
+db.public.registerFunction({ name: 'regexp_replace', args: ['text', 'text', 'text', 'text'], returns: 'text', implementation: (a, b, c, f) => a == null ? null : a.replace(new RegExp(b, f), c) });
 db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
   create table pacientes (pac_id serial primary key, pac_nome text, pac_email text, pac_senha text, pac_cpf text,
@@ -42,6 +44,18 @@ const migracao = fs.readFileSync(
   .replace(/^\s*(BEGIN|COMMIT);\s*$/gm, '')
   .replace(/^--.*$/gm, '');
 db.public.none(migracao);
+// O pg-mem usa índices parciais de forma errada: com ux_solicitacao_origem_ativa
+// (só agendado/concluído), "WHERE sol_origem_id = X" deixa de achar os
+// cancelados. No Postgres/Neon o índice fica; aqui ele é trocado por um comum.
+// A regra "um agendamento ativo por prescrição" também é conferida no código.
+db.public.none('DROP INDEX ux_solicitacao_origem_ativa; CREATE INDEX ix_teste_origem ON solicitacao (sol_origem_id);');
+
+// migração de 15/10: só o trecho marcado (o resto usa DO $$ ... $$, que o pg-mem não executa)
+const migracao2 = fs.readFileSync(
+  path.join(BACKEND, 'database/migracoes/2026-10-15_reenvio_e_cadastros.sql'), 'utf8');
+db.public.none(
+  migracao2.slice(migracao2.indexOf('-- @pgmem-inicio'), migracao2.indexOf('-- @pgmem-fim'))
+    .replace(/^--.*$/gm, ''));
 
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
@@ -624,25 +638,13 @@ test('H2 paciente vê o histórico só dos próprios itens, sem o nome da equipe
   assert.equal((await request(app).get(`/solicitacao/${ids.sol1}/historico`).set(auth(tk.admNorte))).status, 403);
 });
 
-test('H3 transferência de unidade: motivo obrigatório, regras de status e histórico', async () => {
+test('H3 transferência entre unidades foi removida: rota responde 410 e nada muda', async () => {
   const [p] = await knex('solicitacao').insert({ pac_id: ids.pacA, pos_id: ids.posto1, sol_status: 'Pendente', sol_insumo_quant: 0 }).returning('sol_id');
-  const url = `/solicitacao/${p.sol_id}/transferir`;
-  assert.equal((await request(app).patch(url).set(auth(tk.adm)).send({ pos_id: ids.posto2 })).status, 400, 'sem motivo');
-  assert.equal((await request(app).patch(url).set(auth(tk.adm)).send({ pos_id: ids.posto1, motivo: 'x' })).status, 400, 'mesma unidade');
-  assert.equal((await request(app).patch(url).set(auth(tk.adm)).send({ pos_id: 999, motivo: 'x' })).status, 404);
-  assert.equal((await request(app).patch(url).set(auth(tk.admNorte)).send({ pos_id: ids.posto2, motivo: 'x' })).status, 403, 'admin de outro posto');
-  assert.equal((await request(app).patch(url).set(auth(tk.pacA)).send({ pos_id: ids.posto2, motivo: 'x' })).status, 403);
-
-  const ok = await request(app).patch(url).set(auth(tk.adm)).send({ pos_id: ids.posto2, motivo: 'Paciente mudou de bairro' });
-  assert.equal(ok.status, 200, JSON.stringify(ok.body));
-  assert.equal((await knex('solicitacao').where('sol_id', p.sol_id).first()).pos_id, ids.posto2);
-  const hist = (await request(app).get(`/solicitacao/${p.sol_id}/historico`).set(auth(tk.admNorte))).body;
-  const t = hist.find((e) => e.acao === 'transferida');
-  assert.match(t.detalhe, /De Posto Centro para Posto Norte\. Motivo: Paciente mudou de bairro/);
-
-  // agendamento já concluído não pode ser transferido
-  const concl = await request(app).patch(`/solicitacao/${ids.ag2}/transferir`).set(auth(tk.adm)).send({ pos_id: ids.posto2, motivo: 'x' });
-  assert.equal(concl.status, 409);
+  const r = await request(app).patch(`/solicitacao/${p.sol_id}/transferir`).set(auth(tk.adm)).send({ pos_id: ids.posto2, motivo: 'x' });
+  assert.equal(r.status, 410);
+  assert.equal((await knex('solicitacao').where('sol_id', p.sol_id).first()).pos_id, ids.posto1);
+  assert.equal((await request(app).patch(`/solicitacao/${p.sol_id}/transferir`).send({})).status, 401);
+  await knex('solicitacao').where('sol_id', p.sol_id).del();
 });
 
 test('H4 recado no agendamento: salva, aparece para o paciente, só em agendado', async () => {
@@ -759,4 +761,223 @@ test('K2 admin troca o e-mail no perfil e recebe token novo que continua valendo
   // volta ao e-mail original para não afetar outros testes
   const volta = await request(app).put('/perfil').set(auth(r.body.token)).send({ nome: 'Admin Geral', email: 'adm@teste.com', telefone: '24999990000' });
   assert.equal(volta.status, 200);
+});
+
+// ------------------------------------------------------------------
+// Rodada de 15/10 — cadastro, reenvio, remarcação, paginação e painéis
+// ------------------------------------------------------------------
+const basePaciente = {
+  nome: 'Lia Martins', telefone: '24991234567', data_nasc: '1990-01-01', endereco: 'Rua das Flores, 20',
+  cep: '27200000', senha: 'Senha@123', confirmacao_senha: 'Senha@123',
+};
+
+test('L1 cadastro do paciente aceita "Outro", "Prefiro não responder" e campos vazios', async () => {
+  const outro = await request(app).post('/pacientes').send({ ...basePaciente, email: 'lia1@teste.com', cpf: '750.064.938-01', sexo: 'Outro', raca: 'Prefiro não responder' });
+  assert.equal(outro.status, 201, JSON.stringify(outro.body));
+  const l1 = await knex('pacientes').where('pac_email', 'lia1@teste.com').first();
+  assert.equal(l1.pac_sexo, 'O');
+  assert.equal(l1.pac_raca, 'Prefiro não responder');
+
+  const prefiro = await request(app).post('/pacientes').send({ ...basePaciente, email: 'lia2@teste.com', cpf: '433.011.658-85', sexo: 'Prefiro não responder', raca: '' });
+  assert.equal(prefiro.status, 201, JSON.stringify(prefiro.body));
+  const l2 = await knex('pacientes').where('pac_email', 'lia2@teste.com').first();
+  assert.equal(l2.pac_sexo, 'N');
+  assert.equal(l2.pac_raca, 'Não informado');
+
+  const semCampos = await request(app).post('/pacientes').send({ ...basePaciente, email: 'lia3@teste.com', cpf: '503.090.921-40' });
+  assert.equal(semCampos.status, 201, JSON.stringify(semCampos.body));
+
+  const racaRuim = await request(app).post('/pacientes').send({ ...basePaciente, email: 'lia4@teste.com', cpf: '698.293.746-10', raca: 'xyz' });
+  assert.equal(racaRuim.status, 400);
+  assert.ok(racaRuim.body.erros.includes('Selecione uma cor/raça válida.'));
+
+  // e-mail já usado por um administrador não pode virar paciente (o login não acharia)
+  const emailAdm = await request(app).post('/pacientes').send({ ...basePaciente, email: 'ADM@teste.com', cpf: '698.293.746-10' });
+  assert.equal(emailAdm.status, 409);
+});
+
+test('L2 cadastro de administrador: matrícula validada, normalizada e única; sem universal pelo formulário', async () => {
+  const base = { nome: 'Rui Prado', telefone: '24991234567', senha: 'Senha@123', confirmacao_senha: 'Senha@123', posto_id: ids.posto1 };
+  const invalidas = ['', 'ab', 'A#1', 'ABCD', '12', 'x1'.repeat(11)];
+  for (const matricula of invalidas) {
+    const r = await request(app).post('/administrador').send({ ...base, matricula, email: 'rui@teste.com', cpf: '879.376.059-01' });
+    assert.equal(r.status, 400, `matrícula ${JSON.stringify(matricula)}`);
+  }
+
+  const ok = await request(app).post('/administrador').send({ ...base, matricula: ' sms-1234 ', email: 'rui@teste.com', cpf: '879.376.059-01', tp_universal: true });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  const rui = await knex('administrador').where('adm_email', 'rui@teste.com').first();
+  assert.equal(rui.adm_matricula, 'SMS-1234');
+  assert.equal(rui.tp_universal, false, 'universal nunca vem do formulário');
+
+  // mesma matrícula escrita de outro jeito (minúsculas, espaço, sem separador)
+  for (const matricula of ['sms1234', 'SMS 1234', 'sms/1234']) {
+    const dup = await request(app).post('/administrador').send({ ...base, matricula, email: 'rui2@teste.com', cpf: '300.264.746-20' });
+    assert.equal(dup.status, 409, matricula);
+    assert.ok(dup.body.erros.includes('Matrícula já cadastrada.'));
+  }
+
+  const postoRuim = await request(app).post('/administrador').send({ ...base, posto_id: 9999, matricula: 'B-77', email: 'rui3@teste.com', cpf: '300.264.746-20' });
+  assert.equal(postoRuim.status, 400);
+  const postoTexto = await request(app).post('/administrador').send({ ...base, posto_id: 'abc', matricula: 'B-77', email: 'rui3@teste.com', cpf: '300.264.746-20' });
+  assert.equal(postoTexto.status, 400);
+
+  const emailPaciente = await request(app).post('/administrador').send({ ...base, matricula: 'B-78', email: 'ana@teste.com', cpf: '300.264.746-20' });
+  assert.equal(emailPaciente.status, 409);
+  assert.ok(emailPaciente.body.erros.includes('E-mail já cadastrado.'));
+
+  const autEmailUsado = await request(app).post('/autorizador').send({ nome: 'Ivo Reis', email: 'rui@teste.com', telefone: '24991234567', cpf: '300.264.746-20', senha: 'Senha@123', confirmacao_senha: 'Senha@123' });
+  assert.equal(autEmailUsado.status, 409);
+});
+
+const lerBinario = (res, cb) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); };
+
+test('L3 reenvio: o paciente corrige na MESMA solicitação, a versão anterior fica guardada e tudo vai para o histórico', async () => {
+  const env = await request(app).post('/solicitacoes').set(auth(tk.pacA))
+    .send({ pos_id: ids.posto1, sol_prescricao: png('versao-1'), sol_prescricao_tipo: 'image/png' });
+  assert.equal(env.status, 201);
+  const id = env.body.solicitacao.sol_id;
+  const totalAntes = Number((await knex('solicitacao').count({ n: '*' }).first()).n);
+  const corrigir = (token, corpo) => request(app).patch(`/solicitacao/${id}/corrigir`).set(auth(token)).send(corpo);
+
+  // ainda não há pedido de reenvio
+  assert.equal((await corrigir(tk.pacA, { sol_prescricao: png('v2'), sol_prescricao_tipo: 'image/png' })).status, 409);
+
+  assert.equal((await request(app).patch(`/solicitacao/${id}/reenvio`).set(auth(tk.adm)).send({ motivo: 'FOTO_SEM_QUALIDADE' })).status, 200);
+  assert.equal((await knex('solicitacao').where('sol_id', id).first()).sol_status, 'Reenvio');
+
+  // outro paciente, admin e arquivo inválido não passam
+  assert.equal((await corrigir(tk.pacB, { sol_prescricao: png('v2'), sol_prescricao_tipo: 'image/png' })).status, 403);
+  assert.equal((await corrigir(tk.adm, { sol_prescricao: png('v2') })).status, 403);
+  assert.equal((await corrigir(tk.pacA, { sol_prescricao: 'não é base64!' })).status, 400);
+
+  const ok = await corrigir(tk.pacA, { sol_prescricao: png('versao-2'), sol_prescricao_tipo: 'image/png', sol_observacao: '  Foto nova, bem iluminada  ' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.sol_id, id);
+  assert.equal(ok.body.versao, 2);
+
+  const linha = await knex('solicitacao').where('sol_id', id).first();
+  assert.equal(linha.sol_status, 'Pendente', 'voltou para análise');
+  assert.equal(Buffer.from(linha.sol_prescricao).toString('base64'), png('versao-2'));
+  assert.equal(Number((await knex('solicitacao').count({ n: '*' }).first()).n), totalAntes, 'nenhuma solicitação nova');
+
+  const v = await knex('prescricao_versao').where('sol_id', id);
+  assert.equal(v.length, 1);
+  assert.equal(v[0].ver_numero, 1);
+  assert.equal(v[0].ver_motivo_reenvio, 'FOTO_SEM_QUALIDADE');
+  assert.equal(Buffer.from(v[0].ver_prescricao).toString('base64'), png('versao-1'));
+
+  // corrigir de novo sem novo pedido: recusado
+  assert.equal((await corrigir(tk.pacA, { sol_prescricao: png('v3'), sol_prescricao_tipo: 'image/png' })).status, 409);
+
+  const hist = (await request(app).get(`/solicitacao/${id}/historico`).set(auth(tk.adm))).body.map((e) => e.acao);
+  assert.deepEqual(hist, ['enviada', 'reenvio_solicitado', 'reenviada']);
+  const reenviada = (await request(app).get(`/solicitacao/${id}/historico`).set(auth(tk.pacA))).body.find((e) => e.acao === 'reenviada');
+  assert.match(reenviada.detalhe, /Resposta do paciente: Foto nova, bem iluminada/);
+
+  // versões: paciente dono, admin do posto e autorizador veem; outros não
+  const lista = await request(app).get(`/solicitacao/${id}/versoes`).set(auth(tk.pacA));
+  assert.equal(lista.status, 200);
+  assert.equal(lista.body[0].ver_motivo_reenvio_texto, 'Foto sem qualidade');
+  assert.ok(!('ver_prescricao' in lista.body[0]), 'lista não traz o arquivo');
+  assert.equal((await request(app).get(`/solicitacao/${id}/versoes`).set(auth(tk.adm))).status, 200);
+  assert.equal((await request(app).get(`/solicitacao/${id}/versoes`).set(auth(tk.aut))).status, 200);
+  assert.equal((await request(app).get(`/solicitacao/${id}/versoes`).set(auth(tk.pacB))).status, 403);
+  assert.equal((await request(app).get(`/solicitacao/${id}/versoes`).set(auth(tk.admNorte))).status, 403);
+  const arq = await request(app).get(`/solicitacao/${id}/versoes/1/arquivo`).set(auth(tk.pacA)).buffer(true).parse(lerBinario);
+  assert.equal(arq.status, 200);
+  assert.equal(arq.body.toString('base64'), png('versao-1'));
+  assert.equal((await request(app).get(`/solicitacao/${id}/versoes/2/arquivo`).set(auth(tk.pacA))).status, 404);
+
+  // a unidade vê que é uma correção e pode revisar de novo
+  const pend = (await request(app).get('/pendentes').set(auth(tk.adm))).body.find((p) => p.sol_id === id);
+  assert.equal(pend.versoes_anteriores, 1);
+  const painel = (await request(app).get('/painel/admin').set(auth(tk.adm))).body;
+  assert.ok(painel.corrigidasParaRevisar >= 1);
+  const rev = await request(app).patch(`/solicitacao/${id}`).set(auth(tk.adm))
+    .send({ sol_status: 'Revisado', ins_id: ids.insumo, sol_insumo_quant: 1, sol_data_vencimento: amanha });
+  assert.equal(rev.status, 200, JSON.stringify(rev.body));
+  ids.solCorrigida = id;
+});
+
+test('L4 cancelamento e remarcação aparecem como eventos distintos na mesma prescrição, sem duplicar', async () => {
+  const [p] = await knex('solicitacao').insert({ pac_id: ids.pacB, pos_id: ids.posto1, sol_status: 'Autorizado', sol_insumo_quant: 1 }).returning('sol_id');
+  const ag = () => request(app).post('/agendamentos').set(auth(tk.adm))
+    .send(novoAg({ paciente: { pac_id: ids.pacB }, sol_origem_id: p.sol_id }));
+
+  const a1 = await ag();
+  assert.equal(a1.status, 201, JSON.stringify(a1.body));
+  assert.equal((await request(app).patch(`/agendamentos/${a1.body.sol_id}/cancelar`).set(auth(tk.adm)).send({ motivo: 'Unidade fechada no dia' })).status, 200);
+  const a2 = await ag();
+  assert.equal(a2.status, 201, JSON.stringify(a2.body));
+
+  const r = await request(app).get('/minhas-prescricoes').set(auth(tk.pacB));
+  const item = r.body.find((x) => x.sol_id === p.sol_id);
+  assert.equal(item.agendamento.sol_id, a2.body.sol_id, 'status atual = novo agendamento');
+  assert.equal(item.agendamento.sol_status, 'agendado');
+  assert.equal(item.agendamentos_cancelados.length, 1);
+  assert.equal(item.agendamentos_cancelados[0].sol_motivo_cancelamento, 'Unidade fechada no dia');
+  const acoes = item.eventos.map((e) => e.acao);
+  assert.deepEqual(acoes, ['agendada', 'cancelada', 'reagendada'], 'cada evento uma vez, em ordem');
+  assert.match(item.eventos[2].detalhe, /substitui o agendamento cancelado AG/);
+});
+
+test('L5 contato com a unidade: prescrição traz o WhatsApp do posto certo', async () => {
+  await knex('postosdesaude').where('pos_id', ids.posto2).update({ pos_whatsapp: '5524988887777' });
+  const [p] = await knex('solicitacao').insert({ pac_id: ids.pacB, pos_id: ids.posto2, sol_status: 'Nao Autorizado', sol_motivo_nao_autorizado: 'Fora do protocolo', sol_insumo_quant: 1 }).returning('sol_id');
+  const r = await request(app).get('/minhas-prescricoes').set(auth(tk.pacB));
+  const item = r.body.find((x) => x.sol_id === p.sol_id);
+  assert.equal(item.pos_whatsapp, '5524988887777');
+  assert.equal(item.pos_id, ids.posto2);
+});
+
+test('L6 listas longas paginadas no banco, com filtros e sem vazar dados de outro paciente/posto', async () => {
+  const ag = await request(app).get('/agendamentos').query({ page: 1, porPagina: 1, status: 'todos' }).set(auth(tk.adm));
+  assert.equal(ag.status, 200);
+  assert.equal(ag.body.itens.length, 1);
+  assert.ok(ag.body.total > 1 && ag.body.totalPaginas === ag.body.total);
+  const ag2 = await request(app).get('/agendamentos').query({ page: 2, porPagina: 1, status: 'todos' }).set(auth(tk.adm));
+  assert.notEqual(ag2.body.itens[0].sol_id, ag.body.itens[0].sol_id);
+  const semPagina = await request(app).get('/agendamentos').query({ status: 'todos' }).set(auth(tk.adm));
+  assert.ok(Array.isArray(semPagina.body), 'sem ?page= continua devolvendo a lista inteira');
+  assert.equal(semPagina.body.length, ag.body.total);
+  assert.ok(semPagina.body.every((a) => a.posto.pos_id === ids.posto1));
+
+  const minhas = await request(app).get('/minhas-prescricoes').query({ situacao: 'encerradas', page: 1, porPagina: 1 }).set(auth(tk.pacB));
+  assert.equal(minhas.status, 200);
+  assert.ok(minhas.body.itens.length <= 1);
+  assert.ok(minhas.body.contagem.encerradas >= 1);
+  assert.ok(minhas.body.itens.every((p) => p.sol_status === 'Nao Autorizado' || p.agendamento?.sol_status === 'concluido'));
+  const andamento = await request(app).get('/minhas-prescricoes').query({ situacao: 'andamento', page: 1 }).set(auth(tk.pacB));
+  assert.equal(andamento.body.total, andamento.body.contagem.andamento);
+  assert.equal((await request(app).get('/minhas-prescricoes').query({ situacao: 'x' }).set(auth(tk.pacB))).status, 400);
+
+  const hist = await request(app).get('/prescricoes/historico').query({ page: 1, porPagina: 2, status: 'Revisado' }).set(auth(tk.adm));
+  assert.equal(hist.status, 200);
+  assert.ok(hist.body.itens.every((p) => ['Revisado', 'Aprovado'].includes(p.sol_status)));
+  assert.ok(hist.body.itens.length <= 2);
+  const busca = await request(app).get('/prescricoes/historico').query({ page: 1, busca: 'Ana' }).set(auth(tk.adm));
+  assert.ok(busca.body.itens.every((p) => p.pac_nome.includes('Ana')));
+  assert.equal((await request(app).get('/prescricoes/historico').query({ page: 1, status: 'xyz' }).set(auth(tk.adm))).status, 400);
+
+  const aut = await request(app).get('/prescricao/aprovadas').query({ page: 1, porPagina: 5, status: 'Revisado' }).set(auth(tk.aut));
+  assert.equal(aut.status, 200);
+  assert.ok(aut.body.itens.every((p) => ['Revisado', 'Aprovado'].includes(p.sol_status)));
+  const corrigida = aut.body.itens.find((p) => p.sol_id === ids.solCorrigida);
+  assert.equal(corrigida?.versoes_anteriores, 1, 'autorizador vê que recebeu nova versão');
+});
+
+test('L7 painel do autorizador: fila, novas versões e as próprias decisões', async () => {
+  const r = await request(app).get('/painel/autorizador').set(auth(tk.aut));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.aguardando >= 1);
+  assert.ok(r.body.comNovaVersao >= 1);
+  assert.equal(typeof r.body.autorizadas30, 'number');
+  assert.ok(Array.isArray(r.body.fila) && r.body.fila.length <= 5);
+  assert.ok(Array.isArray(r.body.recentes));
+  assert.equal((await request(app).get('/painel/autorizador').set(auth(tk.adm))).status, 403);
+
+  const adm = await request(app).get('/painel/admin').set(auth(tk.adm));
+  assert.equal(typeof adm.body.aguardandoPaciente, 'number');
+  assert.ok(Array.isArray(adm.body.proximasColetas));
 });

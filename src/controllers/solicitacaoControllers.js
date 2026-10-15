@@ -1,14 +1,13 @@
 import knex from './../database/index.js';
-import { dataHojeBrasil, idValido, validarDataISO, validarMotivo } from '../utils/validacoes.js';
+import { dataHojeBrasil, idValido, validarDataISO } from '../utils/validacoes.js';
 import { ACOES, linhaDoTempo, registrarHistorico } from '../utils/historico.js';
+import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
+import { COLUNA_VERSOES, numerarVersoes, versoesJoin } from '../utils/versoes.js';
 
 // Mesmo limite do formulário de envio (EnviarSolicitacao.tsx)
 const TAMANHO_MAX_PRESCRICAO = 5 * 1024 * 1024;
 const TAMANHO_MAX_OBSERVACAO = 1000;
 const REGEX_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
-
-// Prescrições em andamento e agendamentos ainda não realizados
-const STATUS_TRANSFERIVEIS = ["Pendente", "Revisado", "Autorizado", "agendado"];
 
 // Textos dos motivos de reenvio (mesmos da tela do admin)
 const MOTIVOS_REENVIO = {
@@ -21,6 +20,44 @@ const MOTIVOS_REENVIO = {
 // O formulário aceita "image/*,.pdf"
 const tipoPrescricaoPermitido = (tipo) =>
     typeof tipo === 'string' && (/^image\/[a-z0-9.+-]+$/i.test(tipo) || tipo === 'application/pdf');
+
+// Confere o arquivo e a observação enviados pelo paciente (envio novo e
+// reenvio usam as mesmas regras). Devolve { erro } ou { buffer, tipo, observacao }.
+function validarArquivoPrescricao({ sol_prescricao, sol_prescricao_tipo, sol_observacao }) {
+    if (!sol_prescricao) return { erro: 'Prescrição não fornecida' };
+    if (typeof sol_prescricao !== 'string' || !REGEX_BASE64.test(sol_prescricao)) {
+        return { erro: 'Arquivo da prescrição inválido. Envie novamente.' };
+    }
+    if (sol_prescricao_tipo && !tipoPrescricaoPermitido(sol_prescricao_tipo)) {
+        return { erro: 'Formato não suportado. Envie uma imagem ou um PDF.' };
+    }
+    if (sol_observacao != null && typeof sol_observacao !== 'string') {
+        return { erro: 'Observação inválida' };
+    }
+    if (sol_observacao && sol_observacao.trim().length > TAMANHO_MAX_OBSERVACAO) {
+        return { erro: `A observação deve ter no máximo ${TAMANHO_MAX_OBSERVACAO} caracteres` };
+    }
+    const buffer = Buffer.from(sol_prescricao, 'base64');
+    if (!buffer.length) return { erro: 'Arquivo da prescrição vazio' };
+    if (buffer.length > TAMANHO_MAX_PRESCRICAO) return { erro: 'A prescrição deve ter no máximo 5 MB.' };
+    return { buffer, tipo: sol_prescricao_tipo || null, observacao: sol_observacao?.trim() || null };
+}
+
+// Quem pode ver uma solicitação (histórico, versões): o paciente dono, o
+// admin do posto (ou universal) e o autorizador. Devolve null se pode, ou
+// { status, error }.
+function negarAcesso(sessao, solicitacao) {
+    if (sessao.tipo === "PACIENTE" && Number(solicitacao.pac_id) !== Number(sessao.id)) {
+        return { status: 403, error: "Esta solicitação não é sua" };
+    }
+    if (sessao.tipo === "ADMIN" && !sessao.tp_universal && Number(sessao.posto_id) !== Number(solicitacao.pos_id)) {
+        return { status: 403, error: "Acesso negado: solicitação de outro posto" };
+    }
+    if (!["PACIENTE", "ADMIN", "AUTORIZADOR"].includes(sessao.tipo)) {
+        return { status: 403, error: "Perfil sem permissão" };
+    }
+    return null;
+}
 
 export default {
 
@@ -47,37 +84,11 @@ export default {
             return res.status(400).json({ error: 'Posto de saúde inválido' });
         }
 
-        if (!sol_prescricao) {
-            return res.status(400).json({ error: 'Prescrição não fornecida' });
+        const arquivo = validarArquivoPrescricao({ sol_prescricao, sol_prescricao_tipo, sol_observacao });
+        if (arquivo.erro) {
+            return res.status(400).json({ error: arquivo.erro });
         }
-
-        if (typeof sol_prescricao !== 'string' || !REGEX_BASE64.test(sol_prescricao)) {
-            return res.status(400).json({ error: 'Arquivo da prescrição inválido. Envie novamente.' });
-        }
-
-        if (sol_prescricao_tipo && !tipoPrescricaoPermitido(sol_prescricao_tipo)) {
-            return res.status(400).json({ error: 'Formato não suportado. Envie uma imagem ou um PDF.' });
-        }
-
-        if (sol_observacao != null && typeof sol_observacao !== 'string') {
-            return res.status(400).json({ error: 'Observação inválida' });
-        }
-
-        if (sol_observacao && sol_observacao.trim().length > TAMANHO_MAX_OBSERVACAO) {
-            return res.status(400).json({
-                error: `A observação deve ter no máximo ${TAMANHO_MAX_OBSERVACAO} caracteres`
-            });
-        }
-
-        const imagemBuffer = Buffer.from(sol_prescricao, 'base64');
-
-        if (!imagemBuffer.length) {
-            return res.status(400).json({ error: 'Arquivo da prescrição vazio' });
-        }
-
-        if (imagemBuffer.length > TAMANHO_MAX_PRESCRICAO) {
-            return res.status(400).json({ error: 'A prescrição deve ter no máximo 5 MB.' });
-        }
+        const imagemBuffer = arquivo.buffer;
 
         const posto = await knex('postosdesaude').where('pos_id', Number(pos_id)).first('pos_id');
         if (!posto) {
@@ -103,8 +114,8 @@ export default {
                     pac_id: pac_id,
                     pos_id: Number(pos_id),
                     sol_prescricao: imagemBuffer,
-                    sol_prescricao_tipo: sol_prescricao_tipo || null,
-                    sol_observacao: sol_observacao?.trim() || null,
+                    sol_prescricao_tipo: arquivo.tipo,
+                    sol_observacao: arquivo.observacao,
                     sol_status: 'Pendente',
                     sol_insumo_quant: 0
                 })
@@ -146,6 +157,7 @@ async buscarprescricoespendetes(req, res) {
                 "pac.pac_id",
                 "sol.pac_id"
             )
+            .leftJoin(...versoesJoin("sol"))
             .select(
                 "sol.sol_id",
                 "sol.pac_id",
@@ -157,7 +169,9 @@ async buscarprescricoespendetes(req, res) {
                 "pac.pac_avatar",
                 // prescrição autorizada que já virou agendamento (agendado ou
                 // concluído): a tela troca "Agendar" por "Ver agendamento"
-                knex.raw("(ag.sol_origem_id IS NOT NULL) AS agendamento_ativo")
+                knex.raw("(ag.sol_origem_id IS NOT NULL) AS agendamento_ativo"),
+                // quantas versões anteriores (> 0 = o paciente já corrigiu após pedido de reenvio)
+                COLUNA_VERSOES
             )
             .leftJoin(
                 knex("solicitacao")
@@ -192,13 +206,9 @@ async buscarprescricoespendetes(req, res) {
         }
 
 
-        const solicitacoes = await query;
+        const solicitacoes = numerarVersoes(await query);
 
-
-
-        return res.status(200).json(
-            solicitacoes
-        );
+        return res.status(200).json(solicitacoes);
 
 
     } catch (error) {
@@ -507,76 +517,58 @@ async buscarSolicitacaoPorId(req, res) {
 },
 
 
-//buscar historico das prescrições 
+//buscar historico das prescrições
+// Com ?page= a busca, os filtros e a paginação são feitos no banco
+// ({ itens, total, paginaAtual, totalPaginas }); sem ele, a lista inteira.
 async buscarHistoricoPrescricoes(req, res) {
     try {
         const admin = req.session;
+        const { busca, status, data_inicio, data_fim } = req.query;
 
-        const query = knex("solicitacao as sol")
-            .innerJoin(
-                "pacientes as pac",
-                "pac.pac_id",
-                "sol.pac_id"
-            )
-            .leftJoin(
-                "insumo as ins",
-                "ins.ins_id",
-                "sol.ins_id"
-            )
-            .leftJoin(
-                "postosdesaude as pos",
-                "pos.pos_id",
-                "sol.pos_id"
-            )
-            .select(
-                "sol.sol_id",
-                "sol.pac_id",
-                "sol.pos_id",
-                "sol.sol_status",
-                "sol.sol_data_solicitacao",
-                "sol.sol_data_vencimento",
-                "sol.sol_motivo_nao_autorizado",
-                "sol.sol_motivo_reenvio",
-                "sol.sol_insumo_quant",
-                "sol.sol_observacao",
-                "sol.sol_prescricao_tipo",
-
-                "pac.pac_nome",
-                "pac.pac_cpf",
-                "pac.pac_avatar",
-
-                "ins.ins_nome",
-                "pos.pos_nome"
-            )
-            .whereIn("sol.sol_status", [
-                "Aprovado",
-                "Reenvio",
-                "Revisado",
-                "Nao Autorizado"
-            ]);
-
-        if (!admin.tp_universal) {
-            query.andWhere("sol.pos_id", admin.posto_id);
+        const STATUS_HISTORICO = ["Aprovado", "Reenvio", "Revisado", "Nao Autorizado"];
+        if (status && status !== "TODOS" && !STATUS_HISTORICO.includes(status)) {
+            return res.status(400).json({ error: "Filtro de status inválido" });
+        }
+        if ((data_inicio && validarDataISO(data_inicio)) || (data_fim && validarDataISO(data_fim))) {
+            return res.status(400).json({ error: "Intervalo de datas inválido" });
         }
 
-        const historico = await query;
+        const query = knex("solicitacao as sol")
+            .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
+            .leftJoin("insumo as ins", "ins.ins_id", "sol.ins_id")
+            .leftJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
+            .whereIn("sol.sol_status", STATUS_HISTORICO)
+            .modify(filtroBuscaPaciente(busca))
+            .modify((qb) => {
+                if (!admin.tp_universal) qb.where("sol.pos_id", admin.posto_id ?? null);
+                // "Revisado" inclui o status antigo "Aprovado" (mesma etapa)
+                if (status === "Revisado") qb.whereIn("sol.sol_status", ["Revisado", "Aprovado"]);
+                else if (status && status !== "TODOS") qb.where("sol.sol_status", status);
+                if (data_inicio) qb.where("sol.sol_data_solicitacao", ">=", `${data_inicio}T00:00:00-03:00`);
+                if (data_fim) qb.where("sol.sol_data_solicitacao", "<=", `${data_fim}T23:59:59.999-03:00`);
+            });
 
-        return res.status(200).json(historico);
+        const montar = (qb) => qb.select(
+            "sol.sol_id", "sol.pac_id", "sol.pos_id", "sol.sol_status",
+            "sol.sol_data_solicitacao", "sol.sol_data_vencimento",
+            "sol.sol_motivo_nao_autorizado", "sol.sol_motivo_reenvio",
+            "sol.sol_insumo_quant", "sol.sol_observacao", "sol.sol_prescricao_tipo",
+            "pac.pac_nome", "pac.pac_cpf", "pac.pac_avatar",
+            "ins.ins_nome", "pos.pos_nome",
+        ).orderBy("sol.sol_data_solicitacao", "desc").orderBy("sol.sol_id", "desc");
+
+        if (req.query.page !== undefined) {
+            return res.status(200).json(await paginar(query, montar, req.query));
+        }
+
+        return res.status(200).json(await query.modify(montar));
 
     } catch (error) {
-
-        console.error(
-            "Erro ao buscar histórico:",
-            error
-        );
-
+        console.error("Erro ao buscar histórico:", error);
         return res.status(500).json({
             error: "Erro ao processar a solicitação. Tente novamente."
         });
-
-
     }
-
 },
 
 
@@ -662,74 +654,6 @@ async pedirReenvio(req, res) {
   }
 },
 
-// TRANSFERIR PARA OUTRA UNIDADE (admin)
-//
-// Vale para prescrições ainda em andamento (Pendente, Revisado,
-// Autorizado) e para agendamentos ainda não realizados (agendado).
-// O motivo é obrigatório e fica no histórico, com quem transferiu.
-async transferirUnidade(req, res) {
-  try {
-    const { id } = req.params;
-    const { pos_id, motivo } = req.body ?? {};
-
-    if (!idValido(pos_id)) {
-      return res.status(400).json({ error: "Selecione a unidade de destino" });
-    }
-
-    const erroMotivo = validarMotivo(motivo, "da transferência");
-    if (erroMotivo) {
-      return res.status(400).json({ error: erroMotivo });
-    }
-
-    const destino = await knex("postosdesaude").where("pos_id", Number(pos_id)).first("pos_id", "pos_nome");
-    if (!destino) {
-      return res.status(404).json({ error: "Unidade de destino não encontrada" });
-    }
-
-    const resultado = await knex.transaction(async (trx) => {
-      const atual = await trx("solicitacao as sol")
-        .leftJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
-        .where("sol.sol_id", id)
-        .forUpdate()
-        .first("sol.sol_id", "sol.sol_status", "sol.pos_id", "pos.pos_nome");
-
-      if (!atual) return { status: 404, corpo: { error: "Solicitação não encontrada" } };
-
-      if (!STATUS_TRANSFERIVEIS.includes(atual.sol_status)) {
-        return {
-          status: 409,
-          corpo: { error: "Só é possível transferir prescrições em andamento ou agendamentos ainda não realizados." },
-        };
-      }
-
-      if (Number(atual.pos_id) === Number(destino.pos_id)) {
-        return { status: 400, corpo: { error: "A solicitação já está nesta unidade" } };
-      }
-
-      await trx("solicitacao").where("sol_id", id).update({ pos_id: destino.pos_id });
-
-      await registrarHistorico(trx, req.session, {
-        sol_id: Number(id),
-        acao: ACOES.TRANSFERIDA,
-        de: atual.sol_status,
-        para: atual.sol_status,
-        detalhe: `De ${atual.pos_nome ?? "unidade não informada"} para ${destino.pos_nome}. Motivo: ${motivo.trim()}`,
-      });
-
-      return {
-        status: 200,
-        corpo: { message: `Transferido para ${destino.pos_nome}`, pos_id: destino.pos_id, pos_nome: destino.pos_nome },
-      };
-    });
-
-    return res.status(resultado.status).json(resultado.corpo);
-
-  } catch (error) {
-    console.error("Erro ao transferir de unidade:", error);
-    return res.status(500).json({ error: "Erro ao transferir de unidade" });
-  }
-},
-
 // HISTÓRICO ("quem fez o quê") de uma solicitação/agendamento.
 // Admin e autorizador veem os nomes; o paciente vê só os próprios itens
 // e o papel de quem fez (não o nome do servidor).
@@ -746,12 +670,9 @@ async historico(req, res) {
       return res.status(404).json({ error: "Solicitação não encontrada" });
     }
 
-    if (sessao.tipo === "PACIENTE" && Number(solicitacao.pac_id) !== Number(sessao.id)) {
-      return res.status(403).json({ error: "Esta solicitação não é sua" });
-    }
-
-    if (sessao.tipo === "ADMIN" && !sessao.tp_universal && Number(sessao.posto_id) !== Number(solicitacao.pos_id)) {
-      return res.status(403).json({ error: "Acesso negado: solicitação de outro posto" });
+    const negado = negarAcesso(sessao, solicitacao);
+    if (negado) {
+      return res.status(negado.status).json({ error: negado.error });
     }
 
     // agendamento criado a partir de uma prescrição: mostra também o
@@ -773,25 +694,63 @@ async historico(req, res) {
 // MINHAS PRESCRIÇÕES (paciente) — base do rastreio "estilo entrega".
 // Cada prescrição vem com o agendamento mais recente feito a partir dela
 // e com a linha do tempo (sem o nome de quem fez na unidade).
+//
+// ?situacao=andamento|encerradas&page=&porPagina= devolve só uma página
+// daquela aba ({ itens, total, paginaAtual, totalPaginas, contagem }).
+// Sem "situacao", devolve a lista inteira (formato antigo).
 async minhasPrescricoes(req, res) {
   try {
     const pac_id = req.session.id;
+    const { situacao } = req.query;
 
-    const prescricoes = await knex("solicitacao as sol")
+    if (situacao && !["andamento", "encerradas"].includes(situacao)) {
+      return res.status(400).json({ error: "Situação inválida" });
+    }
+
+    // encerrada = não autorizada ou já retirada (agendamento concluído)
+    const retiradas = () => knex("solicitacao")
+      .select("sol_origem_id")
+      .whereNotNull("sol_origem_id")
+      .where("sol_status", "concluido");
+    const encerradas = (qb) => qb.where((w) => w.where("sol.sol_status", "Nao Autorizado").orWhereIn("sol.sol_id", retiradas()));
+    const emAndamento = (qb) => qb.whereNot("sol.sol_status", "Nao Autorizado").whereNotIn("sol.sol_id", retiradas());
+
+    const base = () => knex("solicitacao as sol")
+      .where("sol.pac_id", pac_id)
+      .whereNotIn("sol.sol_status", ["agendado", "concluido", "cancelado"]);
+
+    const contar = async (filtro) => Number((await base().modify(filtro).count({ total: "*" }).first())?.total ?? 0);
+
+    let pagina = null;
+    let consulta = base()
       .leftJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
       .leftJoin("insumo as ins", "ins.ins_id", "sol.ins_id")
-      .where("sol.pac_id", pac_id)
-      .whereNotIn("sol.sol_status", ["agendado", "concluido", "cancelado"])
+      .leftJoin(...versoesJoin("sol"))
       .select(
         "sol.sol_id", "sol.sol_status", "sol.sol_data_solicitacao", "sol.sol_data_vencimento",
         "sol.sol_observacao", "sol.sol_prescricao_tipo", "sol.sol_insumo_quant",
         "sol.sol_motivo_nao_autorizado", "sol.sol_motivo_reenvio",
-        "pos.pos_nome", "ins.ins_nome",
+        "sol.pos_id", "pos.pos_nome", "pos.pos_whatsapp", "ins.ins_nome",
         knex.raw("(sol.sol_prescricao IS NOT NULL) AS tem_prescricao"),
+        COLUNA_VERSOES,
       )
       .orderBy("sol.sol_data_solicitacao", "desc")
       .orderBy("sol.sol_id", "desc");
 
+    if (situacao) {
+      const [andamento, total_encerradas] = await Promise.all([contar(emAndamento), contar(encerradas)]);
+      const total = situacao === "andamento" ? andamento : total_encerradas;
+      const porPagina = Math.min(Math.max(Number(req.query.porPagina) || 10, 1), 50);
+      const totalPaginas = Math.max(1, Math.ceil(total / porPagina));
+      const paginaAtual = Math.min(Math.max(1, Number(req.query.page) || 1), totalPaginas);
+      pagina = { total, paginaAtual, totalPaginas, contagem: { andamento, encerradas: total_encerradas } };
+      consulta = consulta
+        .modify(situacao === "andamento" ? emAndamento : encerradas)
+        .limit(porPagina)
+        .offset((paginaAtual - 1) * porPagina);
+    }
+
+    const prescricoes = numerarVersoes(await consulta);
     const ids = prescricoes.map((p) => p.sol_id);
 
     const agendamentos = ids.length
@@ -801,7 +760,8 @@ async minhasPrescricoes(req, res) {
         .where("ag.pac_id", pac_id)
         .select(
           "ag.sol_id", "ag.sol_origem_id", "ag.sol_status", "ag.sol_protocolo", "ag.sol_data_de_coleta",
-          "ag.sol_motivo_cancelamento", "ag.sol_recado", "pos.pos_nome", "pos.pos_endereco",
+          "ag.sol_motivo_cancelamento", "ag.sol_data_cancelamento", "ag.sol_recado",
+          "pos.pos_nome", "pos.pos_endereco", "pos.pos_whatsapp",
         )
         .orderBy("ag.sol_id", "desc")
       : [];
@@ -810,22 +770,168 @@ async minhasPrescricoes(req, res) {
       ? await linhaDoTempo([...ids, ...agendamentos.map((a) => a.sol_id)], { ocultarNomesDaEquipe: true })
       : [];
 
-    const resposta = prescricoes.map((p) => {
+    const itens = prescricoes.map((p) => {
       const doItem = agendamentos.filter((a) => a.sol_origem_id === p.sol_id);
       const idsDoItem = new Set([p.sol_id, ...doItem.map((a) => a.sol_id)]);
       return {
         ...p,
         // o mais recente (se o primeiro foi cancelado e houve reagendamento, vem o novo)
         agendamento: doItem[0] ?? null,
+        // agendamentos cancelados antes do atual (continuam no histórico)
+        agendamentos_cancelados: doItem.slice(1).filter((a) => a.sol_status === "cancelado")
+          .map(({ sol_id, sol_protocolo, sol_data_de_coleta, sol_motivo_cancelamento, sol_data_cancelamento }) =>
+            ({ sol_id, sol_protocolo, sol_data_de_coleta, sol_motivo_cancelamento, sol_data_cancelamento })),
         eventos: eventos.filter((e) => idsDoItem.has(e.sol_id)),
       };
     });
 
-    return res.status(200).json(resposta);
+    return res.status(200).json(pagina ? { ...pagina, itens } : itens);
 
   } catch (error) {
     console.error("Erro ao buscar minhas prescrições:", error);
     return res.status(500).json({ error: "Erro ao buscar suas prescrições" });
+  }
+},
+
+// REENVIO PELO PACIENTE (correção dentro da MESMA solicitação)
+//
+// Quando a unidade pede reenvio, a solicitação fica em "Reenvio". O
+// paciente manda o arquivo corrigido por aqui: o arquivo anterior é
+// guardado em prescricao_versao, a solicitação mantém o mesmo número e o
+// histórico, e volta para "Pendente" (nova análise da unidade).
+async corrigirPrescricao(req, res) {
+  try {
+    const { id } = req.params;
+    const pac_id = req.session.id;
+    const { sol_prescricao, sol_prescricao_tipo, sol_observacao } = req.body ?? {};
+
+    const arquivo = validarArquivoPrescricao({ sol_prescricao, sol_prescricao_tipo, sol_observacao });
+    if (arquivo.erro) {
+      return res.status(400).json({ error: arquivo.erro });
+    }
+
+    const resultado = await knex.transaction(async (trx) => {
+      const atual = await trx("solicitacao")
+        .where("sol_id", id)
+        .forUpdate()
+        .first("sol_id", "pac_id", "sol_status", "sol_prescricao", "sol_prescricao_tipo",
+          "sol_observacao", "sol_motivo_reenvio", "sol_data_solicitacao");
+
+      if (!atual) return { status: 404, corpo: { error: "Solicitação não encontrada" } };
+      if (Number(atual.pac_id) !== Number(pac_id)) {
+        return { status: 403, corpo: { error: "Esta solicitação não é sua" } };
+      }
+      if (atual.sol_status !== "Reenvio") {
+        return { status: 409, corpo: { error: "A unidade não pediu reenvio desta prescrição." } };
+      }
+
+      // quando a versão que sai foi enviada (o último envio ou reenvio)
+      const ultimoEnvio = await trx("historico_solicitacao")
+        .where("sol_id", id)
+        .whereIn("his_acao", [ACOES.ENVIADA, ACOES.REENVIADA])
+        .orderBy("his_criado_em", "desc")
+        .first("his_criado_em");
+
+      const versoesAnteriores = Number(
+        (await trx("prescricao_versao").where("sol_id", id).count({ total: "*" }).first())?.total ?? 0
+      );
+      const numeroGuardado = versoesAnteriores + 1;
+
+      await trx("prescricao_versao").insert({
+        sol_id: atual.sol_id,
+        ver_numero: numeroGuardado,
+        ver_prescricao: atual.sol_prescricao,
+        ver_prescricao_tipo: atual.sol_prescricao_tipo,
+        ver_observacao: atual.sol_observacao,
+        ver_motivo_reenvio: atual.sol_motivo_reenvio,
+        ver_enviada_em: ultimoEnvio?.his_criado_em ?? atual.sol_data_solicitacao,
+      });
+
+      // UPDATE condicional (outro reenvio simultâneo não passa)
+      const n = await trx("solicitacao")
+        .where("sol_id", id)
+        .where("sol_status", "Reenvio")
+        .update({
+          sol_prescricao: arquivo.buffer,
+          sol_prescricao_tipo: arquivo.tipo,
+          sol_observacao: arquivo.observacao,
+          sol_status: "Pendente",
+        });
+      if (!n) return { status: 409, corpo: { error: "A unidade não pediu reenvio desta prescrição." } };
+
+      const versaoNova = numeroGuardado + 1;
+      await registrarHistorico(trx, req.session, {
+        sol_id: atual.sol_id,
+        acao: ACOES.REENVIADA,
+        de: "Reenvio",
+        para: "Pendente",
+        detalhe: `Versão ${versaoNova} da prescrição enviada (a versão ${numeroGuardado} fica guardada).` +
+          (arquivo.observacao ? `
+Resposta do paciente: ${arquivo.observacao}` : ""),
+      });
+
+      return {
+        status: 200,
+        corpo: { message: "Prescrição reenviada. Ela voltou para análise da unidade.", sol_id: atual.sol_id, versao: versaoNova },
+      };
+    });
+
+    return res.status(resultado.status).json(resultado.corpo);
+
+  } catch (error) {
+    console.error("Erro ao reenviar prescrição:", error);
+    return res.status(500).json({ error: "Erro ao reenviar a prescrição. Tente novamente." });
+  }
+},
+
+// VERSÕES ANTERIORES DA PRESCRIÇÃO (só os dados; o arquivo vem em outra rota)
+async versoes(req, res) {
+  try {
+    const { id } = req.params;
+    const solicitacao = await knex("solicitacao").where("sol_id", id).first("sol_id", "pac_id", "pos_id");
+    if (!solicitacao) return res.status(404).json({ error: "Solicitação não encontrada" });
+
+    const negado = negarAcesso(req.session, solicitacao);
+    if (negado) return res.status(negado.status).json({ error: negado.error });
+
+    const lista = await knex("prescricao_versao")
+      .where("sol_id", id)
+      .orderBy("ver_numero", "asc")
+      .select("ver_numero", "ver_prescricao_tipo", "ver_observacao", "ver_motivo_reenvio",
+        "ver_enviada_em", "ver_substituida_em");
+
+    return res.status(200).json(lista.map((v) => ({
+      ...v,
+      ver_motivo_reenvio_texto: MOTIVOS_REENVIO[v.ver_motivo_reenvio] ?? v.ver_motivo_reenvio,
+    })));
+  } catch (error) {
+    console.error("Erro ao listar versões:", error);
+    return res.status(500).json({ error: "Erro ao listar as versões da prescrição" });
+  }
+},
+
+// ARQUIVO DE UMA VERSÃO ANTERIOR
+async arquivoVersao(req, res) {
+  try {
+    const { id, versao } = req.params;
+    if (!idValido(versao)) return res.status(400).json({ error: "Versão inválida" });
+
+    const solicitacao = await knex("solicitacao").where("sol_id", id).first("sol_id", "pac_id", "pos_id");
+    if (!solicitacao) return res.status(404).json({ error: "Solicitação não encontrada" });
+
+    const negado = negarAcesso(req.session, solicitacao);
+    if (negado) return res.status(negado.status).json({ error: negado.error });
+
+    const v = await knex("prescricao_versao")
+      .where({ sol_id: id, ver_numero: Number(versao) })
+      .first("ver_prescricao", "ver_prescricao_tipo");
+    if (!v?.ver_prescricao) return res.status(404).json({ error: "Versão não encontrada" });
+
+    res.setHeader("Content-Type", tipoPrescricaoPermitido(v.ver_prescricao_tipo) ? v.ver_prescricao_tipo : "application/octet-stream");
+    return res.send(v.ver_prescricao);
+  } catch (error) {
+    console.error("Erro ao buscar versão:", error);
+    return res.status(500).json({ error: "Erro ao buscar a versão da prescrição" });
   }
 },
 };
