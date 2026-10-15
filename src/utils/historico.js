@@ -9,12 +9,14 @@ export const ACOES = {
   ENVIADA: 'enviada',                    // paciente enviou a prescrição
   REVISADA: 'revisada',                  // admin enviou para o autorizador
   REENVIO: 'reenvio_solicitado',         // admin pediu nova foto/documento
+  REENVIADA: 'reenviada',                // paciente corrigiu e reenviou na mesma solicitação
   AUTORIZADA: 'autorizada',              // autorizador autorizou
   NAO_AUTORIZADA: 'nao_autorizada',      // autorizador não autorizou
   AGENDADA: 'agendada',                  // admin criou o agendamento
+  REAGENDADA: 'reagendada',              // novo agendamento depois de um cancelamento
   CONCLUIDA: 'concluida',                // coleta entregue
   CANCELADA: 'cancelada',                // agendamento cancelado
-  TRANSFERIDA: 'transferida',            // mudou de unidade
+  TRANSFERIDA: 'transferida',            // mudou de unidade (função removida; só registros antigos)
   RECADO: 'recado',                      // admin deixou/alterou o recado
 };
 
@@ -62,7 +64,20 @@ export async function linhaDoTempo(sol_ids, { ocultarNomesDaEquipe = false } = {
     .whereIn('sol_id', ids)
     .orderBy([{ column: 'his_criado_em', order: 'asc' }, { column: 'his_id', order: 'asc' }]);
 
-  return linhas.map((h) => ({
+  // Agendar, concluir e cancelar gravam o mesmo evento no agendamento e na
+  // prescrição de origem (mesma transação, mesmo texto). Ao juntar os dois
+  // na mesma linha do tempo, cada acontecimento aparece uma vez só.
+  const ultimoVisto = new Map();
+  const unicos = linhas.filter((h) => {
+    const chave = `${h.his_acao}|${h.his_detalhe ?? ''}`;
+    const quando = new Date(h.his_criado_em).getTime();
+    const anterior = ultimoVisto.get(chave);
+    if (anterior !== undefined && Math.abs(quando - anterior) < 5000) return false;
+    ultimoVisto.set(chave, quando);
+    return true;
+  });
+
+  return unicos.map((h) => ({
     his_id: h.his_id,
     sol_id: h.sol_id,
     acao: h.his_acao,

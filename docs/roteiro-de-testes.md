@@ -32,7 +32,7 @@ npm install
    npm test
    ```
 
-   Deve terminar com `pass 53` e `fail 0`.
+   Deve terminar com `pass 62` e `fail 0`.
 
 2. **Backend com dados fictícios** (deixe esta janela aberta):
 
@@ -83,7 +83,8 @@ mesmo tempo. Isso fica para o nível 2.
      contas de teste pelo próprio site (cadastro).
 2. Ainda no Neon, com o branch `teste-melhorias` selecionado, abra o
    **SQL Editor** e rode o arquivo
-   `database/migracoes/2026-10-13_melhorias_insumed.sql`.
+   `database/migracoes/2026-10-13_melhorias_insumed.sql` (se ainda não rodou)
+   e depois `database/migracoes/2026-10-15_reenvio_e_cadastros.sql`.
    **Confira que o branch selecionado é o de teste antes de rodar.**
 3. Copie a **connection string do branch de teste** e crie `Backend-Insumed/.env`:
 
@@ -168,10 +169,9 @@ Marque cada item em celular (DevTools, 375 px) e no computador.
 - [ ] "Meu perfil" do admin (com o posto) e do autorizador; editar nome, e-mail e telefone.
 - [ ] No modal de agendamento, aparecem as 3 datas sugeridas para o posto.
 
-### Fase 3 — histórico, transferência, recado, comprovante
-- [ ] "Histórico" mostra quem fez cada etapa (com nomes para a equipe).
+### Fase 3 — histórico, recado, comprovante
+- [ ] "Histórico" mostra cada etapa com data (e o nome de quem fez, para a equipe).
 - [ ] Paciente vê o "andamento" sem o nome dos servidores.
-- [ ] Transferir de unidade pede destino e motivo; o motivo vai para o histórico.
 - [ ] Recado do admin aparece no card do paciente e no comprovante.
 - [ ] Comprovante com QR Code; "Imprimir / salvar PDF" imprime só o comprovante.
 - [ ] "Falar com a unidade" só aparece se o posto tiver WhatsApp cadastrado
@@ -179,7 +179,8 @@ Marque cada item em celular (DevTools, 375 px) e no computador.
 
 ### Fase 4 — páginas do paciente
 - [ ] "Minhas prescrições" (menu e barra de baixo): rastreio em 5 etapas com datas.
-- [ ] Prescrição com reenvio pedido mostra o motivo e o botão "Enviar nova prescrição".
+- [ ] Prescrição com reenvio pedido mostra o motivo e o botão "Reenviar prescrição"
+      (o reenvio acontece na mesma prescrição; ver "Rodada 3").
 - [ ] Prescrição não autorizada mostra o motivo; aparece em "Encerradas".
 - [ ] Perfil não lista mais prescrições, só o atalho para a página nova.
 - [ ] "Meus agendamentos": abas Próximos (próxima coleta em destaque) e Anteriores.
@@ -191,6 +192,33 @@ Marque cada item em celular (DevTools, 375 px) e no computador.
 - [ ] Admin: "Atividades da unidade" lista quem fez o quê; filtros de data, tipo, pessoa e paciente funcionam.
 - [ ] Enviar prescrição: visual igual ao das outras páginas; arrastar o arquivo funciona;
       arquivo errado ou maior que 5 MB e envio sem unidade mostram a mensagem na tela.
+
+### Rodada 3 — 15/10 (cadastro, reenvio, celular, homes, listas longas)
+- [ ] Cadastro de paciente com gênero "Outro", com "Prefiro não responder" e com
+      gênero e cor/raça em branco: os três cadastram.
+- [ ] Cadastro de admin: matrícula "ab" ou "A#1" é recusada; "sms-1234" vira
+      "SMS-1234"; repetir "sms 1234" mostra "Matrícula já cadastrada".
+- [ ] E-mail já usado por outro perfil (ex.: e-mail de paciente no cadastro de
+      admin) mostra "E-mail já cadastrado". Erro do servidor não apaga o formulário.
+- [ ] Admin revisa uma prescrição: a mensagem é "Prescrição revisada" (não "aprovada").
+- [ ] Admin pede reenvio → paciente vê "Reenviar prescrição" em Minhas prescrições,
+      manda o arquivo (e uma mensagem) → a prescrição continua com o mesmo número,
+      volta para "Em análise" e o histórico mostra o pedido e a resposta.
+- [ ] Na tela do admin/autorizador aparece "esta é a versão 2" com "Ver versão 1".
+- [ ] Cancelar um agendamento e agendar de novo a mesma prescrição: o paciente vê
+      "Coleta remarcada" e, no histórico completo, o cancelamento e a remarcação
+      como eventos separados.
+- [ ] Agendamento cancelado e prescrição não autorizada mostram "Falar com a
+      unidade" (WhatsApp do posto) ou a orientação de procurar a unidade.
+- [ ] Não existe mais "Transferir de unidade" em nenhuma tela.
+- [ ] Nome com "de/da/dos" (ex.: "Maria de Souza") aparece certo no topo.
+- [ ] Celular: sem botão de menu no topo e sem rodapé; barra de baixo com "Mais"
+      (perfil, ajuda, termos, sair) nos três perfis; comprovante e botões do fim
+      da página não ficam atrás da barra.
+- [ ] Computador: em página curta o rodapé encosta na base da tela, sem faixa branca.
+- [ ] Homes do admin e do autorizador mostram números reais (conferir com as listas).
+- [ ] Histórico da prescrição, Prescrições para análise, Agendamentos (admin) e
+      Minhas prescrições têm paginação; busca e filtros continuam funcionando.
 
 ---
 

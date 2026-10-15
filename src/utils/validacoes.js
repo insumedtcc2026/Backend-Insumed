@@ -156,3 +156,81 @@ export function validarMotivo(motivo, rotulo = "") {
 
 // Id numérico positivo vindo da URL ou do corpo da requisição.
 export const idValido = (valor) => /^\d+$/.test(String(valor ?? "")) && Number(valor) > 0;
+
+// ---------------------------------------------------------------
+// Gênero e cor/raça (opcionais no cadastro do paciente)
+// ---------------------------------------------------------------
+
+// Opções do formulário -> letra gravada em pac_sexo. Vazio = "N" (não
+// informado). Aceita também a própria letra, para clientes que já a enviam.
+const SEXOS = {
+  masculino: "M",
+  feminino: "F",
+  outro: "O",
+  "prefiro não responder": "N",
+  "prefiro nao responder": "N",
+  "prefiro não informar": "N",
+  "não informado": "N",
+  m: "M", f: "F", o: "O", n: "N",
+};
+
+// Devolve a letra do gênero, ou undefined se o valor não for reconhecido.
+export function normalizarSexo(sexo) {
+  const valor = texto(String(sexo ?? "")).normalize("NFC").toLowerCase();
+  if (!valor) return "N";
+  return SEXOS[valor];
+}
+
+// Categorias do IBGE + as respostas de quem não quer informar.
+export const RACA_NAO_INFORMADA = "Não informado";
+const RACAS = ["Branca", "Preta", "Parda", "Amarela", "Indígena", "Outra", "Prefiro não responder"];
+
+// Devolve o texto gravado em pac_raca, ou undefined se o valor não for reconhecido.
+export function normalizarRaca(raca) {
+  const valor = texto(String(raca ?? "")).normalize("NFC");
+  if (!valor) return RACA_NAO_INFORMADA;
+  const sem = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  if (sem(valor) === "outro") return "Outra";
+  if (sem(valor) === sem(RACA_NAO_INFORMADA)) return RACA_NAO_INFORMADA;
+  return RACAS.find((r) => sem(r) === sem(valor));
+}
+
+// ---------------------------------------------------------------
+// Matrícula do administrador
+// ---------------------------------------------------------------
+// Não existe um formato oficial único entre as unidades, então a regra
+// aceita os formatos comuns de matrícula de servidor ("12345", "A-1234",
+// "2024.0001", "SMS/123"): letras, números e os separadores . - /
+// Ela é gravada em maiúsculas, sem espaços, e a comparação de duplicidade
+// ignora os separadores ("A-1234" e "a1234" são a mesma matrícula).
+
+export const normalizarMatricula = (matricula) =>
+  texto(String(matricula ?? "")).replace(/\s+/g, "").toUpperCase();
+
+// Chave usada para comparar (só letras e números)
+export const chaveMatricula = (matricula) => normalizarMatricula(matricula).replace(/[^A-Z0-9]/g, "");
+
+export function validarMatricula(matricula) {
+  const valor = normalizarMatricula(matricula);
+  if (!valor) return "Informe a matrícula.";
+  if (!/^[A-Z0-9./-]+$/.test(valor)) return "A matrícula deve ter apenas letras, números e os separadores . - /";
+  if (!/\d/.test(valor)) return "A matrícula deve conter ao menos um número.";
+  const chave = chaveMatricula(valor);
+  if (chave.length < 3) return "A matrícula deve ter ao menos 3 letras ou números.";
+  if (valor.length > 20) return "A matrícula deve ter no máximo 20 caracteres.";
+  return null;
+}
+
+// Mesma comparação no SQL (para achar duplicadas gravadas em outro formato)
+export const whereMatricula = (coluna) => [
+  `UPPER(REGEXP_REPLACE(${coluna}, '[^A-Za-z0-9]', '', 'g')) = ?`,
+];
+
+// Erros do Postgres que viram mensagem clara em vez de "erro genérico"
+export function mensagemErroBanco(error) {
+  if (error?.code === "22001") return "Algum campo passou do tamanho permitido. Confira os dados e tente novamente.";
+  if (error?.code === "23505") return "Já existe um cadastro com estes dados.";
+  if (error?.code === "23514" || error?.code === "22P02") return "Algum campo tem um valor não aceito. Confira os dados e tente novamente.";
+  if (error?.code === "23502") return "Algum campo obrigatório ficou em branco.";
+  return null;
+}

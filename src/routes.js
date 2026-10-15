@@ -54,6 +54,8 @@ routes.put('/perfil', authorization, autorizarAdminOuAut, painelControllers.atua
 
 // Home do admin (fila de trabalho)
 routes.get('/painel/admin', authorization, autorizarAdmin, painelControllers.painelAdmin);
+// Home do autorizador
+routes.get('/painel/autorizador', authorization, autorizarAut, autorizadorControllers.painelAutorizador);
 // atividades da unidade (histórico geral de quem fez o quê)
 routes.get('/atividades', authorization, autorizarAdmin, painelControllers.atividades);
 
@@ -157,12 +159,18 @@ routes.get(
 );
 
 
-// transferir prescrição em andamento ou agendamento para outra unidade
-routes.patch(
-  "/solicitacao/:id/transferir",
-  authorization, autorizarAdmin, validarAcessoSolicitacao,
-  solicitacaoControllers.transferirUnidade
+// A transferência entre unidades foi removida (não faz parte da proposta
+// atual). A rota responde 410 para chamadas antigas, sem alterar nada.
+routes.patch("/solicitacao/:id/transferir", authorization, (req, res) =>
+  res.status(410).json({ error: "A transferência entre unidades não está mais disponível." })
 );
+
+// reenvio feito pelo paciente, dentro da mesma solicitação
+routes.patch("/solicitacao/:id/corrigir", authorization, autorizarPaciente, solicitacaoControllers.corrigirPrescricao);
+
+// versões anteriores da prescrição (o controller confere o perfil e a posse)
+routes.get("/solicitacao/:id/versoes", authorization, solicitacaoControllers.versoes);
+routes.get("/solicitacao/:id/versoes/:versao/arquivo", authorization, solicitacaoControllers.arquivoVersao);
 
 // histórico (quem fez o quê); o controller confere o perfil e a posse
 routes.get("/solicitacao/:id/historico", authorization, solicitacaoControllers.historico);

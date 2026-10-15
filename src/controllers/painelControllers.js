@@ -1,5 +1,7 @@
 import knex from '../database/index.js';
 import jsonwebtoken from 'jsonwebtoken';
+import { emailEmUso } from '../utils/contas.js';
+import { comVersaoAnterior } from '../utils/versoes.js';
 import {
   coletarErros, dataHojeBrasil, formatarTelefone, normalizarEmail, normalizarNome,
   validarDataISO, validarEmail, validarNome, validarTelefone,
@@ -106,11 +108,9 @@ export default {
       const emailFinal = normalizarEmail(email);
       const emailMudou = emailFinal !== String(atual[config.colunas.email] ?? '').toLowerCase();
 
-      if (emailMudou) {
-        const duplicado = await knex(config.tabela)
-          .whereRaw(`LOWER(${config.colunas.email}) = ?`, [emailFinal])
-          .first(config.colunas.email);
-        if (duplicado) return res.status(409).json({ error: 'E-mail já cadastrado' });
+      // e-mail único entre todos os perfis (o login procura nos três)
+      if (emailMudou && await emailEmUso(emailFinal, { tabela: config.tabela, filtro: config.doUsuario(sessao) })) {
+        return res.status(409).json({ error: 'E-mail já cadastrado' });
       }
 
       await knex(config.tabela)
@@ -147,7 +147,13 @@ export default {
       const admin = req.session;
       const hoje = dataHojeBrasil();
 
-      const [pendentes, autorizadasSemAgendamento, coletasHoje, estoqueBaixo] = await Promise.all([
+      const daqui7 = new Date(Date.parse(`${hoje}T12:00:00Z`) + 7 * 86400000).toISOString().slice(0, 10);
+      const comVersao = comVersaoAnterior('s.sol_id');
+
+      const [
+        pendentes, autorizadasSemAgendamento, coletasHoje, estoqueBaixo,
+        corrigidasParaRevisar, aguardandoPaciente, coletas7dias, proximasColetas,
+      ] = await Promise.all([
         contar(knex('solicitacao').where('sol_status', 'Pendente').modify(doPosto(admin, 'pos_id'))),
 
         contar(
@@ -175,15 +181,53 @@ export default {
         ),
 
         contar(knex('insumo').where('ins_quantidade', '<=', LIMITE_ESTOQUE_BAIXO).modify(doPosto(admin, 'pos_id'))),
+
+        // pendentes que o paciente já corrigiu depois de um pedido de reenvio
+        contar(knex('solicitacao as s').where('s.sol_status', 'Pendente').modify(comVersao).modify(doPosto(admin, 's.pos_id'))),
+
+        // reenvio pedido, esperando o paciente mandar a correção
+        contar(knex('solicitacao').where('sol_status', 'Reenvio').modify(doPosto(admin, 'pos_id'))),
+
+        contar(
+          knex('solicitacao')
+            .where('sol_status', 'agendado')
+            .whereBetween('sol_data_de_coleta', [hoje, daqui7])
+            .modify(doPosto(admin, 'pos_id')),
+        ),
+
+        knex('solicitacao as s')
+          .leftJoin('pacientes as p', 'p.pac_id', 's.pac_id')
+          .where('s.sol_status', 'agendado')
+          .where('s.sol_data_de_coleta', '>=', hoje)
+          .modify(doPosto(admin, 's.pos_id'))
+          .select('s.sol_id', 's.sol_protocolo', 's.sol_data_de_coleta', 'p.pac_nome')
+          .orderBy('s.sol_data_de_coleta', 'asc')
+          .orderBy('s.sol_id', 'asc')
+          .limit(5),
       ]);
+
+      // nome da unidade para o cabeçalho da Home (universal = todas)
+      const posto = admin.tp_universal
+        ? null
+        : await knex('postosdesaude').where('pos_id', admin.posto_id ?? null).first('pos_nome');
 
       return res.status(200).json({
         hoje,
+        unidade: admin.tp_universal ? 'Todas as unidades' : posto?.pos_nome ?? null,
         pendentes,
         autorizadasSemAgendamento,
         coletasHoje,
         estoqueBaixo,
         limiteEstoqueBaixo: LIMITE_ESTOQUE_BAIXO,
+        corrigidasParaRevisar,
+        aguardandoPaciente,
+        coletas7dias,
+        proximasColetas: proximasColetas.map((c) => ({
+          sol_id: c.sol_id,
+          protocolo: c.sol_protocolo,
+          data: c.sol_data_de_coleta instanceof Date ? c.sol_data_de_coleta.toISOString().slice(0, 10) : String(c.sol_data_de_coleta).slice(0, 10),
+          pac_nome: c.pac_nome,
+        })),
       });
     } catch (error) {
       console.error('Erro ao montar painel do admin:', error);
@@ -240,7 +284,7 @@ export default {
   },
 
   // ATIVIDADES DA UNIDADE: tudo o que foi registrado no histórico
-  // (quem revisou, autorizou, agendou, entregou, transferiu...), do mais
+  // (quem revisou, autorizou, agendou, entregou, cancelou...), do mais
   // recente para o mais antigo, com filtros. Admin de posto vê só o seu.
   async atividades(req, res) {
     try {

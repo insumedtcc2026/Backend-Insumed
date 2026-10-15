@@ -1,4 +1,9 @@
-# Guia de publicação — melhorias de 13 e 14/10/2026
+# Guia de publicação — melhorias de 13 a 15/10/2026
+
+> **Atualização de 15/10 (rodada 3):** se a primeira publicação já foi feita,
+> faça só os passos marcados com **(15/10)**: backup no Neon, rodar
+> `database/migracoes/2026-10-15_reenvio_e_cadastros.sql` (seção 2.6) e
+> depois juntar os dois branches no `main`, backend primeiro.
 
 Como colocar no ar, de verdade (Neon de produção + `main` + Vercel), tudo o
 que está no branch `claude/project-thread-vrxtwg` dos dois repositórios:
@@ -22,7 +27,7 @@ Tempo estimado: 30 a 45 minutos, contando os testes no final.
       melhor não ter ninguém no meio de um agendamento).
 - [ ] Tenha acesso de administrador ao **Neon**, à **Vercel** (os dois
       projetos) e ao **GitHub** da organização `insumedtcc2026`.
-- [ ] Rode os testes automáticos do backend no branch (devem dar `pass 55`):
+- [ ] Rode os testes automáticos do backend no branch (devem dar `pass 62`):
 
   ```
   cd Backend-Insumed
@@ -99,6 +104,31 @@ O que ela faz (nada é apagado ou alterado nos dados existentes):
 
    Posto sem número continua funcionando; só não aparece o botão
    "Falar com a unidade" para o paciente.
+
+6. **(15/10)** Rode também o arquivo
+   `database/migracoes/2026-10-15_reenvio_e_cadastros.sql`, no mesmo SQL Editor
+   do branch `main`. Ele:
+
+   | Onde | O quê | Para quê |
+   |---|---|---|
+   | `pacientes` | tira restrições antigas de `pac_sexo`/`pac_raca`, aceita vazio e aumenta `pac_raca` para 30 letras (só se for menor) | "Outro" e "Prefiro não responder" no cadastro |
+   | `administrador` | índice único da matrícula (ignora maiúsculas e pontuação) | impedir matrícula repetida |
+   | nova tabela | `prescricao_versao` | guardar o arquivo anterior quando o paciente reenvia |
+   | `solicitacao`, `historico_solicitacao` | índices | listas paginadas rápidas |
+
+   Nenhum dado é apagado. Se aparecer o aviso *"Há matrículas repetidas"*, o
+   índice da matrícula não foi criado (o resto foi); o backend continua
+   bloqueando novas repetições. A consulta do fim do arquivo lista as repetidas.
+
+   Conferência:
+
+   ```sql
+   SELECT COUNT(*) FROM prescricao_versao;   -- deve responder 0
+   SELECT column_name, character_maximum_length, is_nullable
+     FROM information_schema.columns
+    WHERE table_name = 'pacientes' AND column_name IN ('pac_sexo', 'pac_raca');
+   -- is_nullable = YES nas duas
+   ```
 
 ---
 
@@ -201,6 +231,10 @@ motivo "teste de publicação".
       "Ver comprovante" mostra o QR Code.
 - [ ] Admin: "Deixar recado" e "Histórico" no card do agendamento; o recado
       aparece para o paciente.
+- [ ] **(15/10)** Admin pede reenvio de uma prescrição de teste; o paciente
+      reenvia em "Minhas prescrições" e ela volta para análise com o mesmo número.
+- [ ] **(15/10)** No celular: barra de baixo com "Mais", sem rodapé; o
+      comprovante abre inteiro.
 - [ ] Admin: **Cancelar** o agendamento de teste com o motivo
       "teste de publicação"; o motivo aparece para o paciente e em
       "Atividades da unidade".
@@ -222,6 +256,9 @@ antigo funciona com as colunas novas.
 Depois, para o Git ficar igual ao que está no ar, desfaça o merge no `main`
 (pelo GitHub: no pull request, botão **Revert**).
 
+Se precisar voltar o backend da rodada de 15/10, o banco também pode ficar
+como está: a tabela e os índices novos não atrapalham o código anterior.
+
 **Banco (só em último caso):** o branch `backup-antes-melhorias-2026-10-14`
 do Neon tem a foto de antes. Restaurar a partir dele perde o que foi gravado
 depois da publicação, então só faça se houver dano real nos dados.
@@ -242,6 +279,8 @@ depois da publicação, então só faça se houver dano real nos dados.
 - Tela "Meus Insumos" do paciente ainda mostra dados fixos.
 - Notificações (sininho) ficaram para uma próxima etapa.
 - Cadastro de administrador e autorizador continua público (decisão da equipe).
+- A coluna `sol_cancelado_por` fica vazia quando quem cancela é admin (a tabela
+  `administrador` não tem id); quem cancelou fica no histórico, pelo nome.
 
 ---
 
@@ -259,8 +298,8 @@ depois da publicação, então só faça se houver dano real nos dados.
 **Administrador**
 - Home com o que precisa de atenção; "Coletas de hoje" para o balcão (lê o
   QR do comprovante com leitor USB ou digitando o protocolo).
-- Cancelamento com motivo obrigatório; recado; transferência de unidade com
-  motivo; histórico de cada item; "Atividades da unidade".
+- Cancelamento com motivo obrigatório; recado; histórico de cada item;
+  "Atividades da unidade". (A transferência entre unidades foi removida em 15/10.)
 - Ficha do paciente; busca por nome ou CPF; datas sugeridas ao agendar;
   "Meu perfil" com o posto.
 - Solicitações e Histórico no mesmo visual de Agendamentos.

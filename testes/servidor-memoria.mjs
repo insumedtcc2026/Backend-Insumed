@@ -21,6 +21,8 @@ process.env.ACCESS_TOKEN_SECRET = 'segredo-local-de-teste';
 
 const db = newDb();
 db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], returns: 'text', implementation: (a, b, c) => (a == null ? null : a.split(b).join(c)) });
+// REGEXP_REPLACE(texto, padrão, troca, 'g') usado na matrícula
+db.public.registerFunction({ name: 'regexp_replace', args: ['text', 'text', 'text', 'text'], returns: 'text', implementation: (a, b, c, f) => a == null ? null : a.replace(new RegExp(b, f), c) });
 db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
   create table pacientes (pac_id serial primary key, pac_nome text, pac_email text, pac_senha text, pac_cpf text,
@@ -38,6 +40,13 @@ db.public.none(`
 db.public.none(
   fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-13_melhorias_insumed.sql'), 'utf8')
     .replace(/^\s*(BEGIN|COMMIT);\s*$/gm, '').replace(/^--.*$/gm, '')
+);
+// pg-mem usa o índice parcial de forma errada (some com os cancelados); ver api.test.mjs
+db.public.none('DROP INDEX ux_solicitacao_origem_ativa; CREATE INDEX ix_teste_origem ON solicitacao (sol_origem_id);');
+// migração de 15/10: só o trecho que o pg-mem executa
+const migracao2 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-15_reenvio_e_cadastros.sql'), 'utf8');
+db.public.none(
+  migracao2.slice(migracao2.indexOf('-- @pgmem-inicio'), migracao2.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
 
 const knex = db.adapters.createKnex();

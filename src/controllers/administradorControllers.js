@@ -3,9 +3,11 @@ import bcrypt from 'bcrypt';
 import jsonwebtoken from 'jsonwebtoken';
 import {
   coletarErros, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome, somenteDigitos,
-  validarConfirmacaoSenha, validarCPF, validarEmail, validarNome, validarObrigatorio,
+  validarConfirmacaoSenha, validarCPF, validarEmail, validarNome,
   validarSenha, validarTelefone, whereCpf,
+  chaveMatricula, idValido, mensagemErroBanco, normalizarMatricula, validarMatricula, whereMatricula,
 } from '../utils/validacoes.js';
+import { emailEmUso } from '../utils/contas.js';
 import { registrarFalhaLogin, registrarSucessoLogin } from '../middleware/limiteLogin.js';
 
 export default {
@@ -32,16 +34,16 @@ async createadministrador(req, res) {
       senha,
       confirmacao_senha,
       cpf,
-      posto_id,  
+      posto_id,
     } = req.body ?? {};
 
     const erros = coletarErros(
-      validarObrigatorio(matricula, "a matrícula"),
+      validarMatricula(matricula),
       validarNome(nome),
       validarEmail(email),
       validarTelefone(telefone),
       validarCPF(cpf),
-      validarObrigatorio(posto_id, "a unidade de saúde"),
+      idValido(posto_id) ? null : "Selecione a unidade de saúde.",
       validarSenha(senha),
       validarConfirmacaoSenha(senha, confirmacao_senha),
     );
@@ -49,61 +51,62 @@ async createadministrador(req, res) {
       return res.status(400).json({ sucesso: false, erros });
     }
 
-    const matriculaExiste = await knex('administrador')
-      .where('adm_matricula', String(matricula).trim())
-      .first();
-    if (matriculaExiste) {
-      return res.status(409).json({ erro: 'Matrícula já cadastrada' });
-    }
+    // Duplicidades: todos os conflitos de uma vez, para o formulário
+    // mostrar tudo o que precisa ser corrigido.
+    const conflitos = [];
 
-    const emailExiste = await knex('administrador')
-      .whereRaw('LOWER(adm_email) = ?', [normalizarEmail(email)])
-      .first();
-    if (emailExiste) {
-      return res.status(409).json({ erro: 'E-mail já cadastrado' });
-    }
+    const matriculaExiste = await knex('administrador')
+      .whereRaw(...whereMatricula('adm_matricula'), [chaveMatricula(matricula)])
+      .first('adm_matricula');
+    if (matriculaExiste) conflitos.push('Matrícula já cadastrada.');
+
+    if (await emailEmUso(email)) conflitos.push('E-mail já cadastrado.');
 
     const cpfExiste = await knex('administrador')
       .whereRaw(...whereCpf('adm_cpf'), [somenteDigitos(cpf)])
-      .first();
-    if (cpfExiste) {
-      return res.status(409).json({ erro: 'CPF já cadastrado' });
+      .first('adm_cpf');
+    if (cpfExiste) conflitos.push('CPF já cadastrado como administrador.');
+
+    if (conflitos.length) {
+      return res.status(409).json({ sucesso: false, erros: conflitos });
     }
 
-    if (posto_id) {
-      const postoExiste = await knex('postosdesaude')
-        .where('pos_id', posto_id)
-        .first();
-      if (!postoExiste) {
-        return res.status(400).json({ erro: 'Posto inválido' });
-      }
+    const postoExiste = await knex('postosdesaude')
+      .where('pos_id', Number(posto_id))
+      .first('pos_id');
+    if (!postoExiste) {
+      return res.status(400).json({ sucesso: false, erros: ['Unidade de saúde não encontrada.'] });
     }
-    
 
     const hashSenha = await bcrypt.hash(senha, 10);
 
-    const dadoscreate = {
-      adm_matricula: String(matricula).trim(),
+    // tp_universal nunca vem do formulário: o cadastro público sempre cria
+    // um administrador ligado a uma unidade. Admin universal só pelo banco.
+    await knex('administrador').insert({
+      adm_matricula: normalizarMatricula(matricula),
       adm_nome: normalizarNome(nome),
       adm_email: normalizarEmail(email),
       adm_tel: formatarTelefone(telefone),
       adm_senha: hashSenha,
       adm_cpf: formatarCPF(cpf),
-      pos_id: posto_id,  
-      tp_universal: false, 
-    };
-
-    const result = await knex('administrador').insert(dadoscreate);
+      pos_id: Number(posto_id),
+      tp_universal: false,
+    });
 
     return res.status(201).send({
       message: 'Administrador criado com sucesso',
-      id: result[0],
       tp_universal: false,
-      vinculado_a_posto: posto_id
+      vinculado_a_posto: Number(posto_id)
     });
 
   } catch (error) {
     console.error('Erro ao criar administrador:', error);
+    // índice único da matrícula (cadastro simultâneo)
+    if (error?.code === '23505') {
+      return res.status(409).json({ sucesso: false, erros: ['Matrícula já cadastrada.'] });
+    }
+    const doBanco = mensagemErroBanco(error);
+    if (doBanco) return res.status(400).json({ sucesso: false, erros: [doBanco] });
     return res.status(500).send({
       erro: 'Erro ao criar administrador. Tente novamente.'
     });
@@ -161,7 +164,6 @@ const paciente = await knex("pacientes")
 
                 const token = jsonwebtoken.sign(
                     {
-                        id: admin.adm_id,
                         email: admin.adm_email,
                         posto_id: admin.pos_id,
                         tp_universal: admin.tp_universal,
@@ -179,7 +181,6 @@ const paciente = await knex("pacientes")
                     token,
 
                     usuario: {
-    adm_id: admin.adm_id,
     adm_nome: admin.adm_nome,
     adm_cpf: admin.adm_cpf,
     adm_email: admin.adm_email,

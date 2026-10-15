@@ -105,6 +105,36 @@ function baseQueryAgendamentos() {
         .select(SELECT_AGENDAMENTO);
 }
 
+// Paginação feita no banco: primeiro conta e busca só os ids da página
+// (um por agendamento), depois os dados completos desses ids (que vêm
+// "achatados", uma linha por insumo). Assim a página não carrega o
+// histórico inteiro do posto ou do paciente.
+async function listarPaginado(query, filtros, ordenar, maximoPorPagina = 100) {
+    const porPagina = Math.min(Math.max(Number(query.porPagina) || 20, 1), maximoPorPagina);
+    const pedida = Math.max(1, Number(query.page) || 1);
+
+    const filtrada = knex('solicitacao as sol')
+        .leftJoin('pacientes as pac', 'pac.pac_id', 'sol.pac_id')
+        .whereIn('sol.sol_status', STATUS_AGENDAMENTO)
+        .modify(filtros);
+
+    const total = Number((await filtrada.clone().count({ total: 'sol.sol_id' }).first())?.total ?? 0);
+    const totalPaginas = Math.max(1, Math.ceil(total / porPagina));
+    const paginaAtual = Math.min(pedida, totalPaginas);
+
+    const ids = await filtrada.clone()
+        .select('sol.sol_id')
+        .modify(ordenar)
+        .limit(porPagina)
+        .offset((paginaAtual - 1) * porPagina)
+        .then((linhas) => linhas.map((l) => l.sol_id));
+
+    const linhas = ids.length ? await baseQueryAgendamentos().whereIn('sol.sol_id', ids) : [];
+    const porId = new Map(agruparPorAgendamento(linhas).map((a) => [a.sol_id, a]));
+
+    return { itens: ids.map((id) => porId.get(id)).filter(Boolean), paginaAtual, totalPaginas, total };
+}
+
 export default {
 
     // LISTAR AGENDAMENTOS (visão do ADM)
@@ -137,58 +167,54 @@ export default {
                 return res.status(400).send({ message: 'A data inicial não pode ser maior que a data final.' });
             }
 
-            let query = baseQueryAgendamentos();
-
-            // admin de posto vê só os agendamentos do próprio posto; o universal vê todos
             const admin = req.session;
-            if (!admin.tp_universal) {
-                query = query.where('sol.pos_id', admin.posto_id ?? null);
+            const filtros = (qb) => {
+                // admin de posto vê só os agendamentos do próprio posto; o universal vê todos
+                if (!admin.tp_universal) qb.where('sol.pos_id', admin.posto_id ?? null);
+
+                if (status && status !== 'todos') qb.where('sol.sol_status', status);
+
+                if (busca && busca.trim()) {
+                    const termo = busca.trim();
+                    const termoCpf = termo.replace(/\D/g, '');
+
+                    qb.where((w) => {
+                        w.whereILike('pac.pac_nome', `%${termo}%`)
+                            .orWhereILike('sol.sol_protocolo', `%${termo}%`);
+
+                        if (termoCpf) {
+                            w.orWhereRaw(
+                                "REPLACE(REPLACE(pac.pac_cpf, '.', ''), '-', '') LIKE ?",
+                                [`%${termoCpf}%`]
+                            );
+                        }
+                    });
+                }
+
+                if (data_inicio) qb.where('sol.sol_data_de_coleta', '>=', data_inicio);
+                if (data_fim) qb.where('sol.sol_data_de_coleta', '<=', data_fim);
+
+                // --- compatibilidade com o formato antigo (hoje / exceto hoje) ---
+                if (data === 'hoje') qb.where('sol.sol_data_de_coleta', dataHojeBrasil());
+                if (excluir_data === 'hoje') qb.whereNot('sol.sol_data_de_coleta', dataHojeBrasil());
+            };
+
+            const ordenar = (qb) => {
+                if (order === 'proximidade') {
+                    qb.orderByRaw('ABS(sol.sol_data_de_coleta - ?::date)', [dataHojeBrasil()]);
+                } else {
+                    qb.orderBy('sol.sol_data_de_coleta', 'asc');
+                }
+                qb.orderBy('sol.sol_id', 'asc');
+            };
+
+            // Com ?page=, a resposta vem paginada pelo banco ({ itens, total, ... });
+            // sem ele, a lista inteira, como antes (compatibilidade).
+            if (req.query.page !== undefined) {
+                return res.status(200).send(await listarPaginado(req.query, filtros, ordenar));
             }
 
-            if (status && status !== 'todos') {
-                query = query.where('sol.sol_status', status);
-            }
-
-            if (busca && busca.trim()) {
-                const termo = busca.trim();
-                const termoCpf = termo.replace(/\D/g, '');
-
-                query = query.where((qb) => {
-                    qb.whereILike('pac.pac_nome', `%${termo}%`)
-                        .orWhereILike('sol.sol_protocolo', `%${termo}%`);
-
-                    if (termoCpf) {
-                        qb.orWhereRaw(
-                            "REPLACE(REPLACE(pac.pac_cpf, '.', ''), '-', '') LIKE ?",
-                            [`%${termoCpf}%`]
-                        );
-                    }
-                });
-            }
-
-            if (data_inicio) {
-                query = query.where('sol.sol_data_de_coleta', '>=', data_inicio);
-            }
-
-            if (data_fim) {
-                query = query.where('sol.sol_data_de_coleta', '<=', data_fim);
-            }
-
-            // --- compatibilidade com o formato antigo (hoje / exceto hoje) ---
-            if (data === 'hoje') {
-                query = query.where('sol.sol_data_de_coleta', dataHojeBrasil());
-            }
-            if (excluir_data === 'hoje') {
-                query = query.whereNot('sol.sol_data_de_coleta', dataHojeBrasil());
-            }
-
-            if (order === 'proximidade') {
-                query = query.orderByRaw('ABS(sol.sol_data_de_coleta - ?::date)', [dataHojeBrasil()]);
-            } else {
-                query = query.orderBy('sol.sol_data_de_coleta', 'asc');
-            }
-
-            const resultado = await query;
+            const resultado = await baseQueryAgendamentos().modify(filtros).modify(ordenar);
 
             return res.status(200).send(agruparPorAgendamento(resultado));
 
@@ -372,15 +398,26 @@ export default {
 
             await trx('coleta').insert(linhasColeta);
 
-            // histórico: no agendamento e, se houver, na prescrição de origem
+            // histórico: no agendamento e, se houver, na prescrição de origem.
+            // Se a prescrição já teve um agendamento cancelado, este é uma
+            // remarcação: o cancelamento continua registrado e a remarcação
+            // vira outro evento, com o protocolo cancelado no detalhe.
+            const cancelado = origemId
+                ? await trx('solicitacao')
+                    .where({ sol_origem_id: origemId, sol_status: 'cancelado' })
+                    .orderBy('sol_id', 'desc')
+                    .first('sol_protocolo', 'sol_id')
+                : null;
+            const acao = cancelado ? ACOES.REAGENDADA : ACOES.AGENDADA;
             const detalheAgendamento =
-                `${protocolo} · coleta em ${sol_data_de_coleta.split('-').reverse().join('/')} · ${postoExiste.pos_nome}`;
+                `${protocolo} · coleta em ${sol_data_de_coleta.split('-').reverse().join('/')} · ${postoExiste.pos_nome}` +
+                (cancelado ? ` · substitui o agendamento cancelado ${cancelado.sol_protocolo ?? cancelado.sol_id}` : '');
             await registrarHistorico(trx, req.session, {
-                sol_id, acao: ACOES.AGENDADA, para: 'agendado', detalhe: detalheAgendamento,
+                sol_id, acao, para: 'agendado', detalhe: detalheAgendamento,
             });
             if (origemId) {
                 await registrarHistorico(trx, req.session, {
-                    sol_id: origemId, acao: ACOES.AGENDADA, de: 'Autorizado', para: 'Autorizado', detalhe: detalheAgendamento,
+                    sol_id: origemId, acao, de: 'Autorizado', para: 'Autorizado', detalhe: detalheAgendamento,
                 });
             }
 
@@ -644,10 +681,6 @@ export default {
                 return res.status(403).send({ error: 'Rota exclusiva de paciente' });
             }
 
-            const page = Number(req.query.page) || 1;
-            const porPagina = Math.min(Math.max(Number(req.query.porPagina) || 4, 1), 50);
-            const offset = (page - 1) * porPagina;
-
             // ?situacao=proximos  -> só 'agendado', do mais próximo para o mais distante
             // ?situacao=anteriores -> concluídos e cancelados, do mais recente
             // (sem o parâmetro: todos, como antes)
@@ -656,25 +689,19 @@ export default {
                 return res.status(400).send({ message: 'Situação inválida' });
             }
 
-            let consulta = baseQueryAgendamentos().where('sol.pac_id', req.session.id);
-            if (situacao === 'proximos') {
-                consulta = consulta.where('sol.sol_status', 'agendado').orderBy('sol.sol_data_de_coleta', 'asc');
-            } else if (situacao === 'anteriores') {
-                consulta = consulta.whereIn('sol.sol_status', ['concluido', 'cancelado']).orderBy('sol.sol_data_de_coleta', 'desc');
-            } else {
-                consulta = consulta.orderBy('sol.sol_data_de_coleta', 'desc');
-            }
-            const resultado = await consulta.orderBy('sol.sol_id', 'desc');
+            const filtros = (qb) => {
+                qb.where('sol.pac_id', req.session.id);
+                if (situacao === 'proximos') qb.where('sol.sol_status', 'agendado');
+                if (situacao === 'anteriores') qb.whereIn('sol.sol_status', ['concluido', 'cancelado']);
+            };
+            const ordenar = (qb) => {
+                qb.orderBy('sol.sol_data_de_coleta', situacao === 'proximos' ? 'asc' : 'desc')
+                    .orderBy('sol.sol_id', 'desc');
+            };
 
-            const todosAgendamentos = agruparPorAgendamento(resultado);
-
-            const total = todosAgendamentos.length;
-            const totalPaginas = Math.max(1, Math.ceil(total / porPagina));
-            const paginaValida = Math.min(Math.max(1, page), totalPaginas);
-            const inicio = (paginaValida - 1) * porPagina;
-            const itens = todosAgendamentos.slice(inicio, inicio + porPagina);
-
-            return res.status(200).send({ itens, paginaAtual: paginaValida, totalPaginas, total });
+            return res.status(200).send(
+                await listarPaginado({ page: req.query.page || 1, porPagina: req.query.porPagina || 4 }, filtros, ordenar, 50)
+            );
 
         } catch (error) {
             console.error('Erro ao buscar meus agendamentos:', error);

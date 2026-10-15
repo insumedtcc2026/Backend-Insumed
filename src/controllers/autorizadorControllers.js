@@ -3,9 +3,12 @@ import bcrypt from 'bcrypt';
 import {
   coletarErros, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome, somenteDigitos,
   validarConfirmacaoSenha, validarCPF, validarEmail, validarNome, validarSenha,
-  validarMotivo, validarTelefone, whereCpf,
+  validarMotivo, validarTelefone, whereCpf, mensagemErroBanco, validarDataISO,
 } from '../utils/validacoes.js';
+import { emailEmUso } from '../utils/contas.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
+import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
+import { COLUNA_VERSOES, comVersaoAnterior, numerarVersoes, versoesJoin } from '../utils/versoes.js';
 
 export default {
 
@@ -42,72 +45,107 @@ export default {
 
  async buscarPrescricoesAprovadas(req, res) {
     try {
+        // ?status=Revisado|Autorizado|Nao Autorizado|Todos, ?busca=, ?page=
+        // Com ?page= a lista vem paginada pelo banco; sem ele, inteira (como antes).
+        const { status, busca, data_inicio, data_fim } = req.query;
+        const STATUS_AUT = ["Aprovado", "Revisado", "Autorizado", "Nao Autorizado"];
 
+        if (status && status !== "Todos" && !STATUS_AUT.includes(status)) {
+            return res.status(400).json({ error: "Filtro de status inválido." });
+        }
+        if ((data_inicio && validarDataISO(data_inicio)) || (data_fim && validarDataISO(data_fim))) {
+            return res.status(400).json({ error: "Intervalo de datas inválido." });
+        }
 
-        const prescricoes = await knex("solicitacao as sol")
-            .innerJoin(
-                "pacientes as pac",
-                "pac.pac_id",
-                "sol.pac_id"
-            )
-            .leftJoin(
-                "insumo as ins",
-                "ins.ins_id",
-                "sol.ins_id"
-            )
-            .leftJoin(
-                "postosdesaude as pos",
-                "pos.pos_id",
-                "sol.pos_id"
-            )
-            .select(
-                "sol.sol_id",
-                "sol.pac_id",
-                "sol.pos_id",
-                "sol.ins_id",
-                "sol.sol_status",
-                "sol.sol_data_solicitacao",
-                "sol.sol_data_vencimento",
-                "sol.sol_observacao",
-                "sol.sol_prescricao_tipo",
-                "sol.sol_insumo_quant",
+        const query = knex("solicitacao as sol")
+            .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
+            .leftJoin("insumo as ins", "ins.ins_id", "sol.ins_id")
+            .leftJoin("postosdesaude as pos", "pos.pos_id", "sol.pos_id")
+            .whereIn("sol.sol_status", STATUS_AUT)
+            .modify(filtroBuscaPaciente(busca))
+            .modify((qb) => {
+                // "Revisado" inclui o status antigo "Aprovado" (mesma etapa)
+                if (status === "Revisado") qb.whereIn("sol.sol_status", ["Revisado", "Aprovado"]);
+                else if (status && status !== "Todos") qb.where("sol.sol_status", status);
+                if (data_inicio) qb.where("sol.sol_data_solicitacao", ">=", `${data_inicio}T00:00:00-03:00`);
+                if (data_fim) qb.where("sol.sol_data_solicitacao", "<=", `${data_fim}T23:59:59.999-03:00`);
+            });
 
-                "pac.pac_nome",
-                "pac.pac_cpf",
-                "pac.pac_avatar",
+        const montar = (qb) => qb.leftJoin(...versoesJoin("sol")).select(
+            "sol.sol_id", "sol.pac_id", "sol.pos_id", "sol.ins_id", "sol.sol_status",
+            "sol.sol_data_solicitacao", "sol.sol_data_vencimento", "sol.sol_observacao",
+            "sol.sol_prescricao_tipo", "sol.sol_insumo_quant",
+            "pac.pac_nome", "pac.pac_cpf", "pac.pac_avatar",
+            "ins.ins_nome", "pos.pos_nome",
+            // > 0 = o paciente reenviou uma versão corrigida antes da revisão
+            COLUNA_VERSOES,
+        ).orderBy("sol.sol_data_solicitacao", "asc").orderBy("sol.sol_id", "asc");
 
-                "ins.ins_nome",
+        const numerar = numerarVersoes;
 
-                "pos.pos_nome"
-            )
-            .whereIn("sol.sol_status", [
-                 
-                 "Revisado",
-                 "Autorizado",
-                 "Nao Autorizado"
-])
-            .orderBy(
-                "sol.sol_data_solicitacao",
-                "asc"
-            );
+        if (req.query.page !== undefined) {
+            const pagina = await paginar(query, montar, req.query);
+            return res.status(200).json({ ...pagina, itens: numerar(pagina.itens) });
+        }
 
-
-        return res.status(200).json(prescricoes);
+        return res.status(200).json(numerar(await query.modify(montar)));
 
     } catch (error) {
-
-        console.error(
-            "ERRO COMPLETO AO BUSCAR PRESCRIÇÕES:",
-            error
-        );
-
+        console.error("ERRO COMPLETO AO BUSCAR PRESCRIÇÕES:", error);
         return res.status(500).json({
             error: "Erro ao buscar prescrições."
         });
     }
 },
 
-  
+  // PAINEL DO AUTORIZADOR (Home): o que espera a decisão dele e as
+  // decisões que ele mesmo tomou (pelo histórico).
+  async painelAutorizador(req, res) {
+    try {
+      const aut_id = req.session.id;
+      const contar = async (q) => Number((await q.count({ total: "*" }).first())?.total ?? 0);
+      const trintaDias = new Date(Date.now() - 30 * 86400000).toISOString();
+
+      const aguardandoQ = () => knex("solicitacao as sol").whereIn("sol.sol_status", ["Revisado", "Aprovado"]);
+      const comVersao = comVersaoAnterior("sol.sol_id");
+      const minhasDecisoes = () => knex("historico_solicitacao")
+        .where({ his_usuario_tipo: "AUTORIZADOR", his_usuario_id: aut_id })
+        .whereIn("his_acao", [ACOES.AUTORIZADA, ACOES.NAO_AUTORIZADA]);
+
+      const [aguardando, comNovaVersao, autorizadas30, naoAutorizadas30, fila, recentes] = await Promise.all([
+        contar(aguardandoQ()),
+        contar(aguardandoQ().modify(comVersao)),
+        contar(minhasDecisoes().where("his_acao", ACOES.AUTORIZADA).where("his_criado_em", ">=", trintaDias)),
+        contar(minhasDecisoes().where("his_acao", ACOES.NAO_AUTORIZADA).where("his_criado_em", ">=", trintaDias)),
+        aguardandoQ()
+          .innerJoin("pacientes as pac", "pac.pac_id", "sol.pac_id")
+          .leftJoin("insumo as ins", "ins.ins_id", "sol.ins_id")
+          .leftJoin(...versoesJoin("sol"))
+          .select("sol.sol_id", "sol.sol_data_solicitacao", "sol.sol_insumo_quant", "pac.pac_nome", "ins.ins_nome",
+            COLUNA_VERSOES)
+          .orderBy("sol.sol_data_solicitacao", "asc")
+          .limit(5),
+        minhasDecisoes()
+          .select("sol_id", "his_acao", "his_criado_em")
+          .orderBy("his_criado_em", "desc")
+          .limit(5),
+      ]);
+
+      return res.status(200).json({
+        aguardando,
+        comNovaVersao,
+        autorizadas30,
+        naoAutorizadas30,
+        fila: numerarVersoes(fila),
+        recentes: recentes.map((r) => ({ sol_id: r.sol_id, acao: r.his_acao, quando: r.his_criado_em })),
+      });
+    } catch (error) {
+      console.error("Erro ao montar painel do autorizador:", error);
+      return res.status(500).json({ error: "Erro ao carregar o painel" });
+    }
+  },
+
+
   // BUSCAR UMA SOLICITAÇÃO APROVADA
   
   // Usada quando o Autorizador clica em VER MAIS.
@@ -251,7 +289,7 @@ if (!/^\d+$/.test(id)) {
         )
 
        .whereIn("sol_status", [
-    
+    "Aprovado",
     "Revisado",
     "Autorizado",
     "Nao Autorizado"
@@ -456,18 +494,16 @@ return res.status(200).json({
         return res.status(400).json({ sucesso: false, erros });
       }
 
-      const emailExiste = await knex('autorizador')
-        .whereRaw('LOWER(aut_email) = ?', [normalizarEmail(email)])
-        .first();
-      if (emailExiste) {
-        return res.status(409).json({ erro: 'E-mail já cadastrado' });
-      }
+      const conflitos = [];
+      if (await emailEmUso(email)) conflitos.push('E-mail já cadastrado.');
 
       const cpfExiste = await knex('autorizador')
         .whereRaw(...whereCpf('aut_cpf'), [somenteDigitos(cpf)])
-        .first();
-      if (cpfExiste) {
-        return res.status(409).json({ erro: 'CPF já cadastrado' });
+        .first('aut_cpf');
+      if (cpfExiste) conflitos.push('CPF já cadastrado como autorizador.');
+
+      if (conflitos.length) {
+        return res.status(409).json({ sucesso: false, erros: conflitos });
       }
 
       const hashSenha = await bcrypt.hash(senha, 10);
@@ -487,6 +523,8 @@ return res.status(200).json({
     } catch (error) {
 
       console.error('Erro ao criar autorizador:', error);
+      const doBanco = mensagemErroBanco(error);
+      if (doBanco) return res.status(400).json({ sucesso: false, erros: [doBanco] });
 
       return res.status(500).send({
         erro: 'Erro ao criar autorizador. Tente novamente.'
