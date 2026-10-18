@@ -1,4 +1,5 @@
 import knex from "../database/index.js";
+import { avisarEstoque } from "../notificacoes/estoque.js";
 
 export default {
   async buscar(req, res) {
@@ -110,6 +111,8 @@ export default {
       .where('ins_id', id)
       .update({ ins_quantidade: novaQuantidade });
 
+    await avisarEstoque([{ ins_id: insumo.ins_id, antes: atual, depois: novaQuantidade }]);
+
     return res.status(200).send({
       message: tipo === 'entrada' ? 'Entrada registrada com sucesso' : 'Saída registrada com sucesso',
       ins_id: insumo.ins_id,
@@ -165,6 +168,8 @@ export default {
         await knex("insumo")
           .where("ins_id", existe.ins_id)
           .update({ ins_quantidade: quant });
+        // estoque zerado que voltou: avisa quem tem coleta agendada desse insumo
+        await avisarEstoque([{ ins_id: existe.ins_id, antes: Number(existe.ins_quantidade), depois: quant }]);
         return res
           .status(200)
           .send({

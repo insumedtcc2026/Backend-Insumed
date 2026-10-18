@@ -1,8 +1,10 @@
 import knex from './../database/index.js';
-import { dataHojeBrasil, idValido, validarDataISO } from '../utils/validacoes.js';
+import { dataHojeBrasil, idValido, validarDataISO, validarMotivo } from '../utils/validacoes.js';
 import { ACOES, linhaDoTempo, registrarHistorico } from '../utils/historico.js';
 import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
 import { COLUNA_VERSOES, numerarVersoes, versoesJoin } from '../utils/versoes.js';
+import { dataBR, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
+import { notificar } from '../notificacoes/processador.js';
 
 // Mesmo limite do formulário de envio (EnviarSolicitacao.tsx)
 const TAMANHO_MAX_PRESCRICAO = 5 * 1024 * 1024;
@@ -134,6 +136,8 @@ export default {
 
             return nova;
         });
+
+        await notificar();
 
         return res.status(201).json({
             message: 'Solicitação enviada com sucesso',
@@ -452,6 +456,8 @@ async alterarStatus(req, res) {
             });
         }
 
+        await notificar();
+
         return res.status(200).json({
             message: "Solicitação atualizada com sucesso",
             sol_status,
@@ -491,6 +497,7 @@ async buscarSolicitacaoPorId(req, res) {
         "sol.sol_prescricao_tipo",
         "sol.sol_motivo_nao_autorizado",
         "sol.sol_data_vencimento",
+        "sol.sol_observacao_equipe",
         "pac.pac_nome",
         "pac.pac_cpf",
         "pos.pos_nome",
@@ -636,6 +643,8 @@ async pedirReenvio(req, res) {
       });
     }
 
+    await notificar();
+
     return res.status(200).json({
       message: "Pedido de reenvio enviado com sucesso",
       solicitacao
@@ -715,9 +724,16 @@ async minhasPrescricoes(req, res) {
     const encerradas = (qb) => qb.where((w) => w.where("sol.sol_status", "Nao Autorizado").orWhereIn("sol.sol_id", retiradas()));
     const emAndamento = (qb) => qb.whereNot("sol.sol_status", "Nao Autorizado").whereNotIn("sol.sol_id", retiradas());
 
+    // ?sol_id= (link de uma notificação): só aquela prescrição, se for do paciente
+    const { sol_id } = req.query;
+    if (sol_id !== undefined && !idValido(sol_id)) {
+      return res.status(400).json({ error: "Prescrição inválida" });
+    }
+
     const base = () => knex("solicitacao as sol")
       .where("sol.pac_id", pac_id)
-      .whereNotIn("sol.sol_status", ["agendado", "concluido", "cancelado"]);
+      .whereNotIn("sol.sol_status", STATUS_AGENDAMENTO)
+      .modify((qb) => { if (sol_id !== undefined) qb.where("sol.sol_id", Number(sol_id)); });
 
     const contar = async (filtro) => Number((await base().modify(filtro).count({ total: "*" }).first())?.total ?? 0);
 
@@ -760,7 +776,7 @@ async minhasPrescricoes(req, res) {
         .where("ag.pac_id", pac_id)
         .select(
           "ag.sol_id", "ag.sol_origem_id", "ag.sol_status", "ag.sol_protocolo", "ag.sol_data_de_coleta",
-          "ag.sol_motivo_cancelamento", "ag.sol_data_cancelamento", "ag.sol_recado",
+          "ag.sol_motivo_cancelamento", "ag.sol_data_cancelamento", "ag.sol_recado", "ag.sol_data_anterior",
           "pos.pos_nome", "pos.pos_endereco", "pos.pos_whatsapp",
         )
         .orderBy("ag.sol_id", "desc")
@@ -778,9 +794,10 @@ async minhasPrescricoes(req, res) {
         // o mais recente (se o primeiro foi cancelado e houve reagendamento, vem o novo)
         agendamento: doItem[0] ?? null,
         // agendamentos cancelados antes do atual (continuam no histórico)
-        agendamentos_cancelados: doItem.slice(1).filter((a) => a.sol_status === "cancelado")
-          .map(({ sol_id, sol_protocolo, sol_data_de_coleta, sol_motivo_cancelamento, sol_data_cancelamento }) =>
-            ({ sol_id, sol_protocolo, sol_data_de_coleta, sol_motivo_cancelamento, sol_data_cancelamento })),
+        // (inclui os de "não compareceu", que também não tiveram entrega)
+        agendamentos_cancelados: doItem.slice(1).filter((a) => STATUS_AGENDAMENTO_SEM_ENTREGA.includes(a.sol_status))
+          .map(({ sol_id, sol_status, sol_protocolo, sol_data_de_coleta, sol_motivo_cancelamento, sol_data_cancelamento }) =>
+            ({ sol_id, sol_status, sol_protocolo, sol_data_de_coleta, sol_motivo_cancelamento, sol_data_cancelamento })),
         eventos: eventos.filter((e) => idsDoItem.has(e.sol_id)),
       };
     });
@@ -876,11 +893,69 @@ Resposta do paciente: ${arquivo.observacao}` : ""),
       };
     });
 
+    if (resultado.status === 200) await notificar();
+
     return res.status(resultado.status).json(resultado.corpo);
 
   } catch (error) {
     console.error("Erro ao reenviar prescrição:", error);
     return res.status(500).json({ error: "Erro ao reenviar a prescrição. Tente novamente." });
+  }
+},
+
+// REFAZER PEDIDO (admin)
+//
+// Uma prescrição "Nao Autorizado" volta para o autorizador (status
+// "Revisado"), com uma observação obrigatória da unidade explicando o que
+// mudou. O motivo da não autorização anterior continua no histórico.
+// Prescrição vencida não volta: é preciso pedir uma nova ao paciente.
+async refazerPedido(req, res) {
+  try {
+    const { id } = req.params;
+    const observacao = req.body?.observacao;
+
+    if (validarMotivo(observacao)) {
+      return res.status(400).json({
+        error: typeof observacao === "string" && observacao.trim()
+          ? "A observação deve ter no máximo 500 caracteres."
+          : "Informe a observação para o autorizador.",
+      });
+    }
+
+    const atual = await knex("solicitacao").where("sol_id", id).first("sol_status", "sol_data_vencimento");
+    if (!atual) return res.status(404).json({ error: "Solicitação não encontrada" });
+    if (atual.sol_status !== "Nao Autorizado") {
+      return res.status(409).json({ error: "Só é possível refazer o pedido de uma prescrição não autorizada." });
+    }
+    if (prescricaoVencida(atual.sol_data_vencimento, dataHojeBrasil())) {
+      return res.status(409).json({
+        error: `Esta prescrição venceu em ${dataBR(atual.sol_data_vencimento)}. Peça ao paciente uma prescrição nova.`,
+      });
+    }
+
+    const texto = observacao.trim();
+    const alterada = await knex.transaction(async (trx) => {
+      const n = await trx("solicitacao")
+        .where({ sol_id: id, sol_status: "Nao Autorizado" })
+        .update({ sol_status: "Revisado", sol_observacao_equipe: texto, sol_motivo_nao_autorizado: null });
+      if (n) {
+        await registrarHistorico(trx, req.session, {
+          sol_id: Number(id), acao: ACOES.REFEITA, de: "Nao Autorizado", para: "Revisado", detalhe: texto,
+        });
+      }
+      return n;
+    });
+
+    if (!alterada) {
+      return res.status(409).json({ error: "Só é possível refazer o pedido de uma prescrição não autorizada." });
+    }
+
+    await notificar();
+
+    return res.status(200).json({ message: "Pedido reenviado ao autorizador.", sol_id: Number(id), sol_status: "Revisado" });
+  } catch (error) {
+    console.error("Erro ao refazer pedido:", error);
+    return res.status(500).json({ error: "Erro ao refazer o pedido. Tente novamente." });
   }
 },
 

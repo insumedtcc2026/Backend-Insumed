@@ -27,7 +27,7 @@ db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
   create table pacientes (pac_id serial primary key, pac_nome text, pac_email text, pac_senha text, pac_cpf text,
     pac_telefone text, pac_cep text, pac_data_nasc date, pac_endereco text, pac_sexo text, pac_raca text, pac_avatar text);
-  create table administrador (adm_matricula text, adm_nome text, adm_email text, adm_tel text,
+  create table administrador (adm_id serial primary key, adm_matricula text, adm_nome text, adm_email text, adm_tel text,
     adm_senha text, adm_cpf text, pos_id int, tp_universal boolean);
   create table autorizador (aut_id serial primary key, aut_nome text, aut_email text, aut_tel text, aut_senha text, aut_cpf text);
   create table insumo (ins_id serial primary key, ins_nome text, ins_quantidade int, ins_marca text, pos_id int);
@@ -56,6 +56,11 @@ const migracao2 = fs.readFileSync(
 db.public.none(
   migracao2.slice(migracao2.indexOf('-- @pgmem-inicio'), migracao2.indexOf('-- @pgmem-fim'))
     .replace(/^--.*$/gm, ''));
+// migração de 18/10 (notificações): só o trecho marcado
+const migracao3 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-18_notificacoes.sql'), 'utf8');
+db.public.none(
+  migracao3.slice(migracao3.indexOf('-- @pgmem-inicio'), migracao3.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
 
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
@@ -980,4 +985,251 @@ test('L7 painel do autorizador: fila, novas versões e as próprias decisões', 
   const adm = await request(app).get('/painel/admin').set(auth(tk.adm));
   assert.equal(typeof adm.body.aguardandoPaciente, 'number');
   assert.ok(Array.isArray(adm.body.proximasColetas));
+});
+
+// ------------------------------------------------------------------
+// Etapa N — Notificações (sino)
+// ------------------------------------------------------------------
+const somarDiasTeste = (iso, n) => new Date(Date.parse(iso) + n * 86400000).toISOString().slice(0, 10);
+const daqui5 = somarDiasTeste(hoje, 5);
+const notifs = (tipo, id, evento) => knex('notificacao')
+  .where({ not_dest_tipo: tipo, not_dest_id: id })
+  .modify((qb) => { if (evento) qb.where('not_evento', evento); });
+const admId = async (email) => (await knex('administrador').where('adm_email', email).first('adm_id')).adm_id;
+const autId = async () => (await knex('autorizador').where('aut_email', 'aut@teste.com').first('aut_id')).aut_id;
+
+test('N1 fluxo completo: cada etapa avisa só quem deve, sem duplicar', async () => {
+  const adm1 = await admId('adm@teste.com');
+  const admNorte = await admId('norte@teste.com');
+  const aut = await autId();
+  const filaNorteAntes = JSON.stringify(await notifs('ADMIN', admNorte, 'fila_analise'));
+
+  const envio = await request(app).post('/solicitacoes').set(auth(tk.pacB))
+    .send({ pos_id: ids.posto1, sol_prescricao: png('receita-notif'), sol_prescricao_tipo: 'image/png' });
+  assert.equal(envio.status, 201);
+  const sol = envio.body.solicitacao.sol_id;
+  ids.solNotif = sol;
+  assert.equal((await notifs('PACIENTE', ids.pacB, 'prescricao_recebida').where('sol_id', sol)).length, 1);
+  const fila = await notifs('ADMIN', adm1, 'fila_analise').whereNull('not_lida_em');
+  assert.equal(fila.length, 1, 'uma notificação agregada para o admin do posto');
+  assert.match(fila[0].not_mensagem, /aguardando análise na sua unidade/);
+  assert.equal(JSON.stringify(await notifs('ADMIN', admNorte, 'fila_analise')), filaNorteAntes, 'admin de outro posto não recebe');
+  assert.equal((await notifs('PACIENTE', ids.pacA).where('sol_id', sol)).length, 0, 'outro paciente não recebe');
+
+  const rev = await request(app).patch(`/solicitacao/${sol}`).set(auth(tk.adm))
+    .send({ sol_status: 'Revisado', ins_id: ids.insumo, sol_insumo_quant: 3, sol_data_vencimento: daqui5 });
+  assert.equal(rev.status, 200);
+  assert.equal((await notifs('PACIENTE', ids.pacB, 'prescricao_revisada').where('sol_id', sol)).length, 1);
+  const filaAut = await notifs('AUTORIZADOR', aut, 'fila_autorizacao').whereNull('not_lida_em');
+  assert.equal(filaAut.length, 1);
+  assert.match(filaAut[0].not_mensagem, /aguardando sua análise/);
+
+  const nao = await request(app).patch(`/autorizador/solicitacao/${sol}`).set(auth(tk.aut))
+    .send({ sol_status: 'Nao Autorizado', sol_motivo_nao_autorizado: 'Falta o CID na receita' });
+  assert.equal(nao.status, 200);
+  const avisoPac = await notifs('PACIENTE', ids.pacB, 'prescricao_nao_autorizada').where('sol_id', sol).first();
+  assert.match(avisoPac.not_mensagem, /Falta o CID na receita/);
+  assert.equal(avisoPac.not_tom, 'erro');
+  const avisoAdm = await notifs('ADMIN', adm1, 'nao_autorizada_equipe').where('sol_id', sol).first();
+  assert.match(avisoAdm.not_mensagem, /de Bruno/, 'equipe vê o primeiro nome');
+  assert.doesNotMatch(avisoAdm.not_mensagem, /111\.444/, 'nunca o CPF');
+  assert.equal((await notifs('ADMIN', admNorte, 'nao_autorizada_equipe')).length, 0);
+
+  // refazer o pedido: observação obrigatória, volta ao autorizador
+  assert.equal((await request(app).patch(`/solicitacao/${sol}/refazer`).set(auth(tk.adm)).send({})).status, 400);
+  assert.equal((await request(app).patch(`/solicitacao/${sol}/refazer`).set(auth(tk.admNorte)).send({ observacao: 'x' })).status, 403);
+  const refazer = await request(app).patch(`/solicitacao/${sol}/refazer`).set(auth(tk.adm)).send({ observacao: 'CID anexado na nova foto' });
+  assert.equal(refazer.status, 200, JSON.stringify(refazer.body));
+  const linha = await knex('solicitacao').where('sol_id', sol).first();
+  assert.equal(linha.sol_status, 'Revisado');
+  assert.equal(linha.sol_observacao_equipe, 'CID anexado na nova foto');
+  assert.equal((await request(app).patch(`/solicitacao/${sol}/refazer`).set(auth(tk.adm)).send({ observacao: 'de novo' })).status, 409);
+  assert.equal((await notifs('PACIENTE', ids.pacB, 'prescricao_reanalise').where('sol_id', sol)).length, 1);
+  const verAut = await request(app).get(`/autorizador/solicitacao/${sol}`).set(auth(tk.aut));
+  assert.equal(verAut.body.sol_observacao_equipe, 'CID anexado na nova foto');
+
+  const aut2 = await request(app).patch(`/autorizador/solicitacao/${sol}`).set(auth(tk.aut)).send({ sol_status: 'Autorizado' });
+  assert.equal(aut2.status, 200);
+  assert.equal((await notifs('PACIENTE', ids.pacB, 'prescricao_autorizada').where('sol_id', sol)).length, 1);
+  assert.equal((await notifs('ADMIN', adm1, 'pronta_para_agendar').where('sol_id', sol)).length, 1);
+
+  // agendar: coleta não pode ser depois do vencimento
+  const base = { paciente: { pac_id: ids.pacB }, posto: { pos_id: ids.posto1 }, itens: [{ ins_nome: 'Fralda G', quantidade: 1 }], sol_origem_id: sol };
+  const depois = await request(app).post('/agendamentos').set(auth(tk.adm)).send({ ...base, sol_data_de_coleta: somarDiasTeste(daqui5, 1) });
+  assert.equal(depois.status, 400);
+  assert.match(depois.body.message, /vencimento/);
+  const ag = await request(app).post('/agendamentos').set(auth(tk.adm)).send({ ...base, sol_data_de_coleta: amanha });
+  assert.equal(ag.status, 201, JSON.stringify(ag.body));
+  ids.agNotif = ag.body.sol_id;
+  assert.equal((await notifs('PACIENTE', ids.pacB, 'coleta_agendada')).filter((n) => n.sol_id === ids.agNotif).length, 1,
+    'o evento gravado também na prescrição de origem não gera aviso repetido');
+
+  // remarcar: mesma linha, nova data, aviso ao paciente
+  assert.equal((await request(app).patch(`/agendamentos/${ids.agNotif}/remarcar`).set(auth(tk.adm)).send({ sol_data_de_coleta: ontem })).status, 400);
+  assert.equal((await request(app).patch(`/agendamentos/${ids.agNotif}/remarcar`).set(auth(tk.adm)).send({ sol_data_de_coleta: somarDiasTeste(daqui5, 2) })).status, 400);
+  const rem = await request(app).patch(`/agendamentos/${ids.agNotif}/remarcar`).set(auth(tk.adm)).send({ sol_data_de_coleta: daqui5, motivo: 'Posto fechado no feriado' });
+  assert.equal(rem.status, 200, JSON.stringify(rem.body));
+  const agLinha = await knex('solicitacao').where('sol_id', ids.agNotif).first();
+  const anterior = agLinha.sol_data_anterior instanceof Date ? agLinha.sol_data_anterior.toISOString() : String(agLinha.sol_data_anterior);
+  assert.equal(anterior.slice(0, 10), amanha);
+  const avisoRem = await notifs('PACIENTE', ids.pacB, 'coleta_remarcada').where('sol_id', ids.agNotif).first();
+  assert.match(avisoRem.not_mensagem, /Posto fechado no feriado/);
+  assert.equal((await request(app).patch(`/agendamentos/${ids.agNotif}/remarcar`).set(auth(tk.admNorte)).send({ sol_data_de_coleta: amanha })).status, 403);
+
+  await request(app).patch(`/agendamentos/${ids.agNotif}/recado`).set(auth(tk.adm)).send({ recado: 'Traga documento com foto' });
+  assert.equal((await notifs('PACIENTE', ids.pacB, 'recado_unidade').where('sol_id', ids.agNotif)).length, 1);
+
+  // reprocessar todos os eventos não duplica
+  const antes = (await notifs('PACIENTE', ids.pacB)).filter((n) => !n.not_evento.startsWith('lembrete')).length;
+  await knex('notificacao_evento').where('nev_status', 'ok').update({ nev_status: 'erro' });
+  process.env.CRON_SECRET = 'cron-teste';
+  assert.equal((await request(app).get('/tarefas/diaria').set(auth('cron-teste'))).status, 200);
+  assert.equal((await notifs('PACIENTE', ids.pacB)).filter((n) => !n.not_evento.startsWith('lembrete')).length,
+    antes, 'reprocessar os eventos não cria notificações repetidas');
+});
+
+test('N2 sino: lista, contador e marcar como lida só das próprias notificações', async () => {
+  const r = await request(app).get('/notificacoes/resumo').set(auth(tk.pacB));
+  assert.equal(r.status, 200);
+  assert.ok(r.body.naoLidas >= 5);
+  assert.ok(r.body.ultimas.length <= 6);
+  assert.ok(r.body.ultimas.every((n) => n.titulo && n.mensagem && n.link?.startsWith('/')));
+
+  const pagina = await request(app).get('/notificacoes').query({ page: 1, porPagina: 3 }).set(auth(tk.pacB));
+  assert.equal(pagina.status, 200);
+  assert.equal(pagina.body.itens.length, 3);
+  assert.ok(pagina.body.totalPaginas >= 2);
+  const alvo = pagina.body.itens[0];
+
+  // outra pessoa não lê nem marca
+  assert.equal((await request(app).patch(`/notificacoes/${alvo.id}/lida`).set(auth(tk.pacA))).status, 404);
+  assert.equal((await request(app).patch(`/notificacoes/${alvo.id}/lida`).set(auth(tk.adm))).status, 404);
+  assert.equal((await request(app).get('/notificacoes').set(auth(tk.pacA))).body.itens.some((n) => n.id === alvo.id), false);
+
+  const marcar = await request(app).patch(`/notificacoes/${alvo.id}/lida`).set(auth(tk.pacB));
+  assert.equal(marcar.status, 200);
+  assert.equal(marcar.body.naoLidas, r.body.naoLidas - 1);
+  assert.equal((await request(app).patch(`/notificacoes/${alvo.id}/lida`).set(auth(tk.pacB))).status, 200, 'idempotente');
+
+  // ler não muda o status da prescrição/agendamento
+  assert.equal((await knex('solicitacao').where('sol_id', ids.agNotif).first()).sol_status, 'agendado');
+
+  const naoLidas = await request(app).get('/notificacoes').query({ situacao: 'nao_lidas' }).set(auth(tk.pacB));
+  assert.ok(naoLidas.body.itens.every((n) => !n.lida));
+  const todas = await request(app).patch('/notificacoes/lidas').set(auth(tk.pacB)).send({});
+  assert.equal(todas.body.naoLidas, 0);
+  assert.equal((await request(app).get('/notificacoes').query({ situacao: 'xyz' }).set(auth(tk.pacB))).status, 400);
+  assert.equal((await request(app).get('/notificacoes')).status, 401);
+
+  // admin com token antigo (sem id) é reconhecido pelo e-mail
+  const adm = await request(app).get('/notificacoes/resumo').set(auth(tk.adm));
+  assert.equal(adm.status, 200);
+  assert.ok(adm.body.naoLidas >= 1);
+  const desconhecido = jwt.sign({ email: 'ninguem@teste.com', tipo: 'ADMIN' }, process.env.ACCESS_TOKEN_SECRET);
+  assert.equal((await request(app).get('/notificacoes').set(auth(desconhecido))).status, 403);
+});
+
+test('N3 tarefa diária: lembretes, coleta sem baixa, não compareceu e prescrição vencida', async () => {
+  delete process.env.CRON_SECRET;
+  assert.equal((await request(app).get('/tarefas/diaria')).status, 503);
+  process.env.CRON_SECRET = 'cron-teste';
+  assert.equal((await request(app).get('/tarefas/diaria').set(auth('errado'))).status, 401);
+
+  const ag = async (dados) => {
+    const [l] = await knex('solicitacao').insert({ pac_id: ids.pacA, pos_id: ids.posto1, sol_insumo_quant: 0, ...dados }).returning('sol_id');
+    await knex('solicitacao').where('sol_id', l.sol_id).update({ sol_protocolo: `AG${String(l.sol_id).padStart(6, '0')}` });
+    await knex('coleta').insert({ sol_id: l.sol_id, ins_id: ids.insumo, quantidade: 1 });
+    return l.sol_id;
+  };
+  const agHoje = await ag({ sol_status: 'agendado', sol_data_de_coleta: hoje });
+  const agAmanha = await ag({ sol_status: 'agendado', sol_data_de_coleta: amanha });
+  const agCancelado = await ag({ sol_status: 'cancelado', sol_data_de_coleta: amanha });
+  const agOntem = await ag({ sol_status: 'agendado', sol_data_de_coleta: ontem });
+  const agAntigo = await ag({ sol_status: 'agendado', sol_data_de_coleta: somarDiasTeste(hoje, -9) });
+
+  // prescrição autorizada que venceu ontem, com agendamento ativo
+  const [venc] = await knex('solicitacao').insert({ pac_id: ids.pacA, pos_id: ids.posto1, sol_status: 'Autorizado', sol_insumo_quant: 1, ins_id: ids.insumo, sol_data_vencimento: ontem }).returning('sol_id');
+  const agVencida = await ag({ sol_status: 'agendado', sol_data_de_coleta: amanha, sol_origem_id: venc.sol_id });
+
+  const r1 = await request(app).get('/tarefas/diaria').set(auth('cron-teste'));
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  const doA = (evento) => notifs('PACIENTE', ids.pacA, evento);
+
+  assert.equal((await doA('lembrete_hoje').where('sol_id', agHoje)).length, 1);
+  assert.equal((await doA('lembrete_vespera').where('sol_id', agAmanha)).length, 1);
+  assert.equal((await doA().where('sol_id', agCancelado)).length, 0, 'cancelado não recebe lembrete');
+
+  const adm1 = await admId('adm@teste.com');
+  assert.equal((await notifs('ADMIN', adm1, 'coleta_sem_baixa').where('sol_id', agOntem)).length, 1);
+  assert.equal((await knex('solicitacao').where('sol_id', agOntem).first()).sol_status, 'agendado', 'ainda dentro dos 7 dias');
+
+  assert.equal((await knex('solicitacao').where('sol_id', agAntigo).first()).sol_status, 'nao_compareceu');
+  assert.equal((await doA('coleta_nao_realizada').where('sol_id', agAntigo)).length, 1);
+
+  const cancelada = await knex('solicitacao').where('sol_id', agVencida).first();
+  assert.equal(cancelada.sol_status, 'cancelado');
+  assert.equal(cancelada.sol_motivo_cancelamento, 'Prescrição vencida');
+  assert.equal((await doA('prescricao_vencida').where('sol_id', venc.sol_id)).length, 1);
+  assert.equal((await doA('lembrete_vespera').where('sol_id', agVencida)).length, 0, 'agendamento cancelado não recebe lembrete');
+
+  // rodar de novo no mesmo dia não duplica nada
+  const total = (await knex('notificacao')).length;
+  assert.equal((await request(app).get('/tarefas/diaria').set(auth('cron-teste'))).status, 200);
+  assert.equal((await knex('notificacao')).length, total);
+
+  // "não compareceu" aparece em Anteriores e não pode ser concluído
+  const anteriores = await request(app).get('/meus-agendamentos').query({ situacao: 'anteriores', porPagina: 50 }).set(auth(tk.pacA));
+  assert.ok(anteriores.body.itens.some((a) => a.sol_id === agAntigo && a.status === 'nao_compareceu'));
+  assert.equal((await request(app).patch(`/agendamentos/${agAntigo}/concluir`).set(auth(tk.adm))).status, 409);
+
+  // prescrição vencida não pode ser autorizada
+  const [rev] = await knex('solicitacao').insert({ pac_id: ids.pacA, pos_id: ids.posto1, sol_status: 'Revisado', sol_insumo_quant: 1, ins_id: ids.insumo, sol_data_vencimento: ontem }).returning('sol_id');
+  const autVencida = await request(app).patch(`/autorizador/solicitacao/${rev.sol_id}`).set(auth(tk.aut)).send({ sol_status: 'Autorizado' });
+  assert.equal(autVencida.status, 409);
+  assert.match(autVencida.body.error, /venceu/);
+});
+
+test('N4 estoque: equipe avisada de baixo/esgotado; paciente só se tiver coleta agendada do insumo', async () => {
+  const [ins] = await knex('insumo').insert({ ins_nome: 'Luva Nitrílica', ins_quantidade: 10, pos_id: ids.posto1 }).returning('ins_id');
+  const [ag] = await knex('solicitacao').insert({ pac_id: ids.pacA, pos_id: ids.posto1, sol_status: 'agendado', sol_insumo_quant: 0, sol_data_de_coleta: daqui5 }).returning('sol_id');
+  await knex('coleta').insert({ sol_id: ag.sol_id, ins_id: ins.ins_id, quantidade: 2 });
+  const adm1 = await admId('adm@teste.com');
+  const mover = (tipo, quantidade) => request(app).patch(`/insumos/${ins.ins_id}`).set(auth(tk.adm)).send({ tipo, quantidade });
+
+  assert.equal((await mover('saida', 6)).status, 200); // 4 = baixo
+  assert.equal((await notifs('ADMIN', adm1, 'estoque_baixo')).filter((n) => /Luva/.test(n.not_mensagem)).length, 1);
+  assert.equal((await notifs('PACIENTE', ids.pacA, 'estoque_baixo').where('sol_id', ag.sol_id)).length, 1);
+  assert.equal((await notifs('PACIENTE', ids.pacB, 'estoque_baixo')).length, 0, 'quem não tem coleta do insumo não recebe');
+
+  assert.equal((await mover('saida', 4)).status, 200); // 0 = esgotado
+  const esgotado = await notifs('PACIENTE', ids.pacA, 'estoque_esgotado').where('sol_id', ag.sol_id).first();
+  assert.match(esgotado.not_mensagem, /Luva Nitrílica está temporariamente indisponível/);
+
+  assert.equal((await mover('entrada', 20)).status, 200);
+  assert.equal((await notifs('PACIENTE', ids.pacA, 'estoque_reabastecido').where('sol_id', ag.sol_id)).length, 1);
+});
+
+test('N5 falha ao gerar notificação fica registrada e é refeita pela tarefa diária', async () => {
+  const evento = await knex('notificacao_evento as e')
+    .join('historico_solicitacao as h', 'h.his_id', 'e.his_id')
+    .where('h.his_acao', 'enviada').where('h.sol_id', ids.solNotif).first('e.his_id');
+  await knex('notificacao').where({ sol_id: ids.solNotif, not_evento: 'prescricao_recebida' }).del();
+  await knex('notificacao_evento').where('his_id', evento.his_id).update({ nev_status: 'erro', nev_erro: 'falha simulada' });
+
+  assert.equal((await request(app).get('/tarefas/diaria').set(auth('cron-teste'))).status, 200);
+  assert.equal((await knex('notificacao_evento').where('his_id', evento.his_id).first()).nev_status, 'ok');
+  assert.equal((await notifs('PACIENTE', ids.pacB, 'prescricao_recebida').where('sol_id', ids.solNotif)).length, 1);
+});
+
+test('N6 links das notificações: ?sol_id= mostra só o item, e só se for do paciente', async () => {
+  const minha = await request(app).get('/minhas-prescricoes').query({ sol_id: ids.solNotif }).set(auth(tk.pacB));
+  assert.equal(minha.status, 200);
+  assert.deepEqual(minha.body.map((p) => p.sol_id), [ids.solNotif]);
+  const deOutro = await request(app).get('/minhas-prescricoes').query({ sol_id: ids.solNotif }).set(auth(tk.pacA));
+  assert.deepEqual(deOutro.body, []);
+  assert.equal((await request(app).get('/minhas-prescricoes').query({ sol_id: 'abc' }).set(auth(tk.pacB))).status, 400);
+
+  const ag = await request(app).get('/meus-agendamentos').query({ sol_id: ids.agNotif }).set(auth(tk.pacB));
+  assert.deepEqual(ag.body.itens.map((a) => a.sol_id), [ids.agNotif]);
+  assert.equal((await request(app).get('/meus-agendamentos').query({ sol_id: ids.agNotif }).set(auth(tk.pacA))).body.itens.length, 0);
 });

@@ -1,4 +1,5 @@
 import knex from '../database/index.js';
+import { STATUS_AGENDAMENTO } from '../utils/status.js';
 import bcrypt from 'bcrypt';
 import {
   coletarErros, formatarCEP, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome,
@@ -261,7 +262,7 @@ export default {
         )
         .orderBy('sol.sol_id', 'desc');
 
-      const ehAgendamento = (s) => ['agendado', 'concluido', 'cancelado'].includes(s.sol_status);
+      const ehAgendamento = (s) => STATUS_AGENDAMENTO.includes(s.sol_status);
 
       // insumos de cada agendamento
       const idsAgendamento = solicitacoes.filter(ehAgendamento).map((s) => s.sol_id);

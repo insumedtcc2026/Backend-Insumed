@@ -16,6 +16,8 @@ import autorizarVisualizacaoPrescricao from "./middleware/autorizarVisualizacaoP
 import { limiteLogin } from "./middleware/limiteLogin.js";
 import autorizarPaciente from "./middleware/autorizarPaciente.js";
 import { idValido } from "./utils/validacoes.js";
+import notificacoesControllers from "./controllers/notificacoesControllers.js";
+import autorizarCron from "./middleware/autorizarCron.js";
 
 
 const routes = express.Router();
@@ -117,6 +119,8 @@ routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControll
 routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.concluir);
 routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.cancelar);
 routes.patch('/agendamentos/:id/recado', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.salvarRecado);
+// nova data no mesmo agendamento (mesmo protocolo)
+routes.patch('/agendamentos/:id/remarcar', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.remarcar);
 
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);
@@ -175,6 +179,13 @@ routes.get("/solicitacao/:id/versoes/:versao/arquivo", authorization, solicitaca
 // histórico (quem fez o quê); o controller confere o perfil e a posse
 routes.get("/solicitacao/:id/historico", authorization, solicitacaoControllers.historico);
 
+// prescrição não autorizada volta ao autorizador, com observação da unidade
+routes.patch(
+  "/solicitacao/:id/refazer",
+  authorization, autorizarAdmin, validarAcessoSolicitacao,
+  solicitacaoControllers.refazerPedido
+);
+
 routes.patch(
   "/solicitacao/:id/reenvio",
   authorization, autorizarAdmin, validarAcessoSolicitacao,
@@ -191,5 +202,14 @@ routes.patch(
   '/solicitacao/:id',
   authorization, autorizarAdmin, validarAcessoSolicitacao,solicitacaoControllers.alterarStatus
 );
+
+// Notificações do sino: sempre as da pessoa logada (paciente, admin ou autorizador)
+routes.get('/notificacoes', authorization, notificacoesControllers.listar);
+routes.get('/notificacoes/resumo', authorization, notificacoesControllers.resumo);
+routes.patch('/notificacoes/lidas', authorization, notificacoesControllers.marcarTodas);
+routes.patch('/notificacoes/:id/lida', authorization, notificacoesControllers.marcarLida);
+
+// Tarefa diária (Vercel Cron): lembretes, pendências, não compareceu, vencidas
+routes.get('/tarefas/diaria', autorizarCron, notificacoesControllers.tarefaDiaria);
 
 export default routes;

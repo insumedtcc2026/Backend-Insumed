@@ -130,18 +130,46 @@ O que ela faz (nada é apagado ou alterado nos dados existentes):
    -- is_nullable = YES nas duas
    ```
 
+### 2.2 Migração de 18/10 (notificações)
+
+Depois da de 15/10, rode `database/migracoes/2026-10-18_notificacoes.sql`.
+Ela cria o número fixo do administrador (`adm_id`), as tabelas
+`notificacao` e `notificacao_evento`, e as colunas `sol_data_anterior`
+(remarcação) e `sol_observacao_equipe` (refazer pedido). O histórico que já
+existe é marcado como processado, então ninguém recebe avisos antigos.
+
+Conferência:
+
+```sql
+SELECT COUNT(*) FROM administrador WHERE adm_id IS NULL;  -- deve responder 0
+SELECT COUNT(*) FROM notificacao;                         -- deve responder 0
+```
+
+Depois de publicar, os administradores precisam **sair e entrar de novo**
+uma vez só para o token levar o `adm_id` (até lá o backend os reconhece pelo
+e-mail, então nada quebra).
+
 ---
 
 ## 3. Backend — juntar no `main` e publicar
 
 ### 3.1 Variáveis de ambiente (Vercel → projeto do backend → Settings → Environment Variables)
 
-Nada novo é obrigatório. Confira só que **Production** continua com:
+Confira que **Production** continua com as duas de sempre e **crie a nova**
+`CRON_SECRET`:
 
 | Variável | Valor |
 |---|---|
 | `DATABASE_URL` | string de conexão do branch **main** do Neon |
 | `ACCESS_TOKEN_SECRET` | o segredo de sempre (não troque: trocar desloga todo mundo) |
+| `CRON_SECRET` | **nova**: um texto aleatório longo (ex.: gerado por um gerenciador de senhas). A Vercel o envia sozinha ao chamar a tarefa diária |
+
+O `vercel.json` do backend agenda a tarefa diária (`/tarefas/diaria`) para
+todo dia às 10h UTC (7h de Brasília). No plano gratuito ela roda uma vez por
+dia, em algum momento dessa hora. Ela gera os lembretes de coleta, os avisos
+de pendência, marca "não compareceu" e trata as prescrições vencidas. Para
+conferir: Vercel → projeto do backend → **Settings → Cron Jobs** (dá para
+rodar na hora pelo botão **Run**).
 
 Se você criou variáveis de **Preview** para testes (nível 3 do roteiro),
 pode removê-las agora ou depois.
