@@ -1220,3 +1220,16 @@ test('N5 falha ao gerar notificação fica registrada e é refeita pela tarefa d
   assert.equal((await knex('notificacao_evento').where('his_id', evento.his_id).first()).nev_status, 'ok');
   assert.equal((await notifs('PACIENTE', ids.pacB, 'prescricao_recebida').where('sol_id', ids.solNotif)).length, 1);
 });
+
+test('N6 links das notificações: ?sol_id= mostra só o item, e só se for do paciente', async () => {
+  const minha = await request(app).get('/minhas-prescricoes').query({ sol_id: ids.solNotif }).set(auth(tk.pacB));
+  assert.equal(minha.status, 200);
+  assert.deepEqual(minha.body.map((p) => p.sol_id), [ids.solNotif]);
+  const deOutro = await request(app).get('/minhas-prescricoes').query({ sol_id: ids.solNotif }).set(auth(tk.pacA));
+  assert.deepEqual(deOutro.body, []);
+  assert.equal((await request(app).get('/minhas-prescricoes').query({ sol_id: 'abc' }).set(auth(tk.pacB))).status, 400);
+
+  const ag = await request(app).get('/meus-agendamentos').query({ sol_id: ids.agNotif }).set(auth(tk.pacB));
+  assert.deepEqual(ag.body.itens.map((a) => a.sol_id), [ids.agNotif]);
+  assert.equal((await request(app).get('/meus-agendamentos').query({ sol_id: ids.agNotif }).set(auth(tk.pacA))).body.itens.length, 0);
+});

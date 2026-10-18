@@ -1,5 +1,5 @@
 import knex from '../database/index.js';
-import { dataHojeBrasil, validarDataISO, validarMotivo } from '../utils/validacoes.js';
+import { dataHojeBrasil, idValido, validarDataISO, validarMotivo } from '../utils/validacoes.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
 import { dataBR, isoData, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_ATIVO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
 import { idDoAdmin } from '../utils/contas.js';
@@ -805,13 +805,18 @@ export default {
             // ?situacao=proximos  -> só 'agendado', do mais próximo para o mais distante
             // ?situacao=anteriores -> concluídos e cancelados, do mais recente
             // (sem o parâmetro: todos, como antes)
-            const { situacao } = req.query;
+            const { situacao, sol_id } = req.query;
             if (situacao && !['proximos', 'anteriores'].includes(situacao)) {
                 return res.status(400).send({ message: 'Situação inválida' });
+            }
+            // ?sol_id= (link de uma notificação): só aquele agendamento, se for do paciente
+            if (sol_id !== undefined && !idValido(sol_id)) {
+                return res.status(400).send({ message: 'Agendamento inválido' });
             }
 
             const filtros = (qb) => {
                 qb.where('sol.pac_id', req.session.id);
+                if (sol_id !== undefined) qb.where('sol.sol_id', Number(sol_id));
                 if (situacao === 'proximos') qb.where('sol.sol_status', 'agendado');
                 if (situacao === 'anteriores') qb.whereIn('sol.sol_status', ['concluido', ...STATUS_AGENDAMENTO_SEM_ENTREGA]);
             };

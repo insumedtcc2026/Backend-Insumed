@@ -18,6 +18,8 @@ const requireBackend = createRequire(path.join(BACKEND, 'package.json'));
 const bcrypt = requireBackend('bcrypt');
 
 process.env.ACCESS_TOKEN_SECRET = 'segredo-local-de-teste';
+// tarefa diária local: GET /tarefas/diaria com Authorization: Bearer cron-local
+process.env.CRON_SECRET = process.env.CRON_SECRET || 'cron-local';
 
 const db = newDb();
 db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], returns: 'text', implementation: (a, b, c) => (a == null ? null : a.split(b).join(c)) });

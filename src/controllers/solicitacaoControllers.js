@@ -724,9 +724,16 @@ async minhasPrescricoes(req, res) {
     const encerradas = (qb) => qb.where((w) => w.where("sol.sol_status", "Nao Autorizado").orWhereIn("sol.sol_id", retiradas()));
     const emAndamento = (qb) => qb.whereNot("sol.sol_status", "Nao Autorizado").whereNotIn("sol.sol_id", retiradas());
 
+    // ?sol_id= (link de uma notificação): só aquela prescrição, se for do paciente
+    const { sol_id } = req.query;
+    if (sol_id !== undefined && !idValido(sol_id)) {
+      return res.status(400).json({ error: "Prescrição inválida" });
+    }
+
     const base = () => knex("solicitacao as sol")
       .where("sol.pac_id", pac_id)
-      .whereNotIn("sol.sol_status", STATUS_AGENDAMENTO);
+      .whereNotIn("sol.sol_status", STATUS_AGENDAMENTO)
+      .modify((qb) => { if (sol_id !== undefined) qb.where("sol.sol_id", Number(sol_id)); });
 
     const contar = async (filtro) => Number((await base().modify(filtro).count({ total: "*" }).first())?.total ?? 0);
 
