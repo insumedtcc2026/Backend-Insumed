@@ -1,6 +1,10 @@
 import knex from '../database/index.js';
 import { dataHojeBrasil, validarDataISO, validarMotivo } from '../utils/validacoes.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
+import { dataBR, isoData, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_ATIVO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
+import { idDoAdmin } from '../utils/contas.js';
+import { notificar } from '../notificacoes/processador.js';
+import { avisarEstoque } from '../notificacoes/estoque.js';
 
 const TAMANHO_MAX_RECADO = 300;
 
@@ -26,6 +30,8 @@ function agruparPorAgendamento(resultado) {
                 sol_data_cancelamento: linha.sol_data_cancelamento ?? null,
                 sol_origem_id: linha.sol_origem_id ?? null,
                 sol_recado: linha.sol_recado ?? null,
+                // data anterior quando o admin remarcou (aviso "remarcado")
+                sol_data_anterior: linha.sol_data_anterior ?? null,
 
                 paciente: {
                     pac_id: linha.pac_id,
@@ -68,6 +74,7 @@ const SELECT_AGENDAMENTO = [
     'sol.sol_data_cancelamento',
     'sol.sol_origem_id',
     'sol.sol_recado',
+    'sol.sol_data_anterior',
 
     'pac.pac_id',
     'pac.pac_nome',
@@ -85,11 +92,6 @@ const SELECT_AGENDAMENTO = [
     'col.quantidade'
 ];
 
-const STATUS_AGENDAMENTO = ['agendado', 'concluido', 'cancelado'];
-
-// Agendamento "ativo" = ainda conta como atendimento daquela prescrição.
-const STATUS_AGENDAMENTO_ATIVO = ['agendado', 'concluido'];
-
 const TAMANHO_MAX_NOME_INSUMO = 100;
 
 function baseQueryAgendamentos() {
@@ -101,7 +103,7 @@ function baseQueryAgendamentos() {
         .leftJoin('insumo as ins', 'ins.ins_id', 'col.ins_id')
         // a tabela solicitacao também guarda pedidos de prescrição (outro
         // status: Pendente/Aprovado/Reenvio) — nunca misturar com agendamento
-        .whereIn('sol.sol_status', ['agendado', 'concluido', 'cancelado'])
+        .whereIn('sol.sol_status', STATUS_AGENDAMENTO)
         .select(SELECT_AGENDAMENTO);
 }
 
@@ -312,7 +314,7 @@ export default {
                 const origem = await trx('solicitacao')
                     .where('sol_id', origemId)
                     .forUpdate()
-                    .first('sol_id', 'pac_id', 'sol_status');
+                    .first('sol_id', 'pac_id', 'sol_status', 'sol_data_vencimento');
 
                 if (!origem) {
                     return falhar(404, 'Prescrição de origem não encontrada');
@@ -324,6 +326,15 @@ export default {
 
                 if (Number(origem.pac_id) !== pac_id) {
                     return falhar(400, 'O paciente selecionado não é o paciente desta prescrição');
+                }
+
+                // a coleta tem de acontecer dentro da validade da prescrição
+                const vencimento = isoData(origem.sol_data_vencimento);
+                if (prescricaoVencida(vencimento, dataHojeBrasil())) {
+                    return falhar(400, `A prescrição venceu em ${dataBR(vencimento)}. Peça uma prescrição nova ao paciente.`);
+                }
+                if (vencimento && sol_data_de_coleta > vencimento) {
+                    return falhar(400, `A data da coleta não pode ser depois do vencimento da prescrição (${dataBR(vencimento)}).`);
                 }
 
                 const agendamentoAtivo = await trx('solicitacao')
@@ -404,7 +415,8 @@ export default {
             // vira outro evento, com o protocolo cancelado no detalhe.
             const cancelado = origemId
                 ? await trx('solicitacao')
-                    .where({ sol_origem_id: origemId, sol_status: 'cancelado' })
+                    .where('sol_origem_id', origemId)
+                    .whereIn('sol_status', STATUS_AGENDAMENTO_SEM_ENTREGA)
                     .orderBy('sol_id', 'desc')
                     .first('sol_protocolo', 'sol_id')
                 : null;
@@ -422,6 +434,8 @@ export default {
             }
 
             await trx.commit();
+
+            await notificar();
 
             return res.status(201).send({
                 message: 'Agendamento criado com sucesso',
@@ -471,6 +485,10 @@ export default {
                 .forUpdate()
                 .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_origem_id');
 
+            if (solicitacao?.sol_status === 'nao_compareceu') {
+                return falhar(409, { message: 'Este agendamento foi registrado como "não compareceu". Crie um novo agendamento.' });
+            }
+
             if (!solicitacao) {
                 return falhar(404, { message: 'Agendamento não encontrado' });
             }
@@ -483,6 +501,14 @@ export default {
                 return falhar(409, { message: 'Não é possível concluir um agendamento cancelado.' });
             }
 
+            // prescrição vencida: a entrega não pode mais ser registrada
+            if (solicitacao.sol_origem_id) {
+                const origem = await trx('solicitacao').where('sol_id', solicitacao.sol_origem_id).first('sol_data_vencimento');
+                if (prescricaoVencida(origem?.sol_data_vencimento, dataHojeBrasil())) {
+                    return falhar(409, { message: `A prescrição deste agendamento venceu em ${dataBR(origem.sol_data_vencimento)}. Não é possível concluir a coleta.` });
+                }
+            }
+
             const itensColeta = await trx('coleta').where('sol_id', id);
 
             if (!itensColeta.length) {
@@ -490,6 +516,7 @@ export default {
             }
 
             const nomesInsumo = new Map();
+            const mudancasEstoque = [];
             for (const item of itensColeta) {
                 const insumo = await trx('insumo')
                     .where('ins_id', item.ins_id)
@@ -520,6 +547,7 @@ export default {
                 await trx('insumo')
                     .where('ins_id', item.ins_id)
                     .update({ ins_quantidade: estoqueAtual - quantidadeRetirada });
+                mudancasEstoque.push({ ins_id: item.ins_id, antes: estoqueAtual, depois: estoqueAtual - quantidadeRetirada });
             }
 
             await trx('solicitacao')
@@ -538,6 +566,9 @@ export default {
             }
 
             await trx.commit();
+
+            await notificar();
+            await avisarEstoque(mudancasEstoque);
 
             return res.status(200).send({
                 message: 'Agendamento concluído e estoque atualizado'
@@ -570,6 +601,8 @@ export default {
                 return res.status(400).send({ message: erroMotivo });
             }
 
+            const canceladoPor = await idDoAdmin(req.session);
+
             const cancelado = await knex.transaction(async (trx) => {
                 const [linha] = await trx('solicitacao')
                     .where('sol_id', id)
@@ -578,7 +611,7 @@ export default {
                         sol_status: 'cancelado',
                         sol_motivo_cancelamento: motivo.trim(),
                         sol_data_cancelamento: trx.fn.now(),
-                        sol_cancelado_por: req.session?.id ?? null
+                        sol_cancelado_por: canceladoPor
                     })
                     .returning(['sol_id', 'sol_status', 'sol_motivo_cancelamento', 'sol_data_cancelamento', 'sol_protocolo', 'sol_origem_id']);
 
@@ -609,9 +642,13 @@ export default {
                 return res.status(409).send({
                     message: atual.sol_status === 'cancelado'
                         ? 'Este agendamento já foi cancelado.'
-                        : 'Não é possível cancelar um agendamento já concluído.'
+                        : atual.sol_status === 'nao_compareceu'
+                            ? 'Este agendamento já foi registrado como "não compareceu".'
+                            : 'Não é possível cancelar um agendamento já concluído.'
                 });
             }
+
+            await notificar();
 
             return res.status(200).send({
                 message: 'Agendamento cancelado',
@@ -665,11 +702,95 @@ export default {
                     : res.status(404).send({ message: 'Agendamento não encontrado' });
             }
 
+            await notificar();
+
             return res.status(200).send({ message: recado ? 'Recado salvo' : 'Recado removido', sol_recado: resultado.sol_recado });
 
         } catch (error) {
             console.error('Erro ao salvar recado:', error);
             return res.status(500).send({ message: 'Erro ao salvar o recado' });
+        }
+    },
+
+
+    // REMARCAR AGENDAMENTO (admin)
+    //
+    // Muda só a data, no MESMO agendamento (mesmo protocolo e itens). A data
+    // anterior fica em sol_data_anterior (aviso "remarcado" para o paciente)
+    // e no histórico. Também serve para a coleta que passou sem baixa.
+    async remarcar(req, res) {
+        try {
+            const { id } = req.params;
+            const { sol_data_de_coleta: novaData, motivo } = req.body ?? {};
+
+            if (!novaData || validarDataISO(novaData)) {
+                return res.status(400).send({ message: 'Informe uma data válida para a coleta' });
+            }
+            if (novaData < dataHojeBrasil()) {
+                return res.status(400).send({ message: 'A nova data não pode estar no passado' });
+            }
+            if (motivo != null && typeof motivo !== 'string') {
+                return res.status(400).send({ message: 'Motivo inválido' });
+            }
+            const motivoLimpo = (motivo ?? '').trim();
+            if (motivoLimpo.length > 500) {
+                return res.status(400).send({ message: 'O motivo deve ter no máximo 500 caracteres' });
+            }
+
+            const resultado = await knex.transaction(async (trx) => {
+                const ag = await trx('solicitacao')
+                    .where('sol_id', id)
+                    .whereIn('sol_status', STATUS_AGENDAMENTO)
+                    .forUpdate()
+                    .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_data_de_coleta', 'sol_origem_id');
+
+                if (!ag) return { status: 404, corpo: { message: 'Agendamento não encontrado' } };
+                if (ag.sol_status !== 'agendado') {
+                    return { status: 409, corpo: { message: 'Só é possível remarcar agendamentos ainda não realizados.' } };
+                }
+
+                const dataAtual = isoData(ag.sol_data_de_coleta);
+                if (dataAtual === novaData) {
+                    return { status: 400, corpo: { message: 'Escolha uma data diferente da atual' } };
+                }
+
+                if (ag.sol_origem_id) {
+                    const origem = await trx('solicitacao').where('sol_id', ag.sol_origem_id).first('sol_data_vencimento');
+                    const vencimento = isoData(origem?.sol_data_vencimento);
+                    if (vencimento && novaData > vencimento) {
+                        return { status: 400, corpo: { message: `A nova data não pode ser depois do vencimento da prescrição (${dataBR(vencimento)}).` } };
+                    }
+                }
+
+                const n = await trx('solicitacao')
+                    .where({ sol_id: id, sol_status: 'agendado' })
+                    .update({ sol_data_de_coleta: novaData, sol_data_anterior: dataAtual });
+                if (!n) return { status: 409, corpo: { message: 'Só é possível remarcar agendamentos ainda não realizados.' } };
+
+                const detalhe = `${ag.sol_protocolo ?? 'Agendamento ' + id} · de ${dataBR(dataAtual)} para ${dataBR(novaData)}` +
+                    (motivoLimpo ? ` · Motivo: ${motivoLimpo}` : '');
+                await registrarHistorico(trx, req.session, {
+                    sol_id: Number(id), acao: ACOES.REMARCADA, de: 'agendado', para: 'agendado', detalhe,
+                });
+                if (ag.sol_origem_id) {
+                    await registrarHistorico(trx, req.session, {
+                        sol_id: ag.sol_origem_id, acao: ACOES.REMARCADA, de: 'Autorizado', para: 'Autorizado', detalhe,
+                    });
+                }
+
+                return {
+                    status: 200,
+                    corpo: { message: 'Agendamento remarcado', sol_id: Number(id), sol_data_de_coleta: novaData, sol_data_anterior: dataAtual },
+                };
+            });
+
+            if (resultado.status === 200) await notificar();
+
+            return res.status(resultado.status).send(resultado.corpo);
+
+        } catch (error) {
+            console.error('Erro ao remarcar agendamento:', error);
+            return res.status(500).send({ message: 'Erro ao remarcar o agendamento' });
         }
     },
 
@@ -692,7 +813,7 @@ export default {
             const filtros = (qb) => {
                 qb.where('sol.pac_id', req.session.id);
                 if (situacao === 'proximos') qb.where('sol.sol_status', 'agendado');
-                if (situacao === 'anteriores') qb.whereIn('sol.sol_status', ['concluido', 'cancelado']);
+                if (situacao === 'anteriores') qb.whereIn('sol.sol_status', ['concluido', ...STATUS_AGENDAMENTO_SEM_ENTREGA]);
             };
             const ordenar = (qb) => {
                 qb.orderBy('sol.sol_data_de_coleta', situacao === 'proximos' ? 'asc' : 'desc')

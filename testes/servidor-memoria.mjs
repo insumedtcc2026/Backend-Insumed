@@ -27,7 +27,7 @@ db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
   create table pacientes (pac_id serial primary key, pac_nome text, pac_email text, pac_senha text, pac_cpf text,
     pac_telefone text, pac_cep text, pac_data_nasc date, pac_endereco text, pac_sexo text, pac_raca text, pac_avatar text);
-  create table administrador (adm_matricula text, adm_nome text, adm_email text, adm_tel text,
+  create table administrador (adm_id serial primary key, adm_matricula text, adm_nome text, adm_email text, adm_tel text,
     adm_senha text, adm_cpf text, pos_id int, tp_universal boolean);
   create table autorizador (aut_id serial primary key, aut_nome text, aut_email text, aut_tel text, aut_senha text, aut_cpf text);
   create table insumo (ins_id serial primary key, ins_nome text, ins_quantidade int, ins_marca text, pos_id int);
@@ -47,6 +47,11 @@ db.public.none('DROP INDEX ux_solicitacao_origem_ativa; CREATE INDEX ix_teste_or
 const migracao2 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-15_reenvio_e_cadastros.sql'), 'utf8');
 db.public.none(
   migracao2.slice(migracao2.indexOf('-- @pgmem-inicio'), migracao2.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+// migração de 18/10 (notificações): só o trecho marcado
+const migracao3 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-18_notificacoes.sql'), 'utf8');
+db.public.none(
+  migracao3.slice(migracao3.indexOf('-- @pgmem-inicio'), migracao3.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
 
 const knex = db.adapters.createKnex();

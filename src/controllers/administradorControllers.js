@@ -164,6 +164,8 @@ const paciente = await knex("pacientes")
 
                 const token = jsonwebtoken.sign(
                     {
+                        // adm_id (migração de 18/10): número fixo do admin
+                        id: admin.adm_id ?? undefined,
                         email: admin.adm_email,
                         posto_id: admin.pos_id,
                         tp_universal: admin.tp_universal,
@@ -181,6 +183,7 @@ const paciente = await knex("pacientes")
                     token,
 
                     usuario: {
+    adm_id: admin.adm_id ?? null,
     adm_nome: admin.adm_nome,
     adm_cpf: admin.adm_cpf,
     adm_email: admin.adm_email,

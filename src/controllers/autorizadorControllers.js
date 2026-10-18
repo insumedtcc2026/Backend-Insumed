@@ -9,6 +9,9 @@ import { emailEmUso } from '../utils/contas.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
 import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
 import { COLUNA_VERSOES, comVersaoAnterior, numerarVersoes, versoesJoin } from '../utils/versoes.js';
+import { dataBR, prescricaoVencida } from '../utils/status.js';
+import { dataHojeBrasil } from '../utils/validacoes.js';
+import { notificar } from '../notificacoes/processador.js';
 
 export default {
 
@@ -74,7 +77,7 @@ export default {
         const montar = (qb) => qb.leftJoin(...versoesJoin("sol")).select(
             "sol.sol_id", "sol.pac_id", "sol.pos_id", "sol.ins_id", "sol.sol_status",
             "sol.sol_data_solicitacao", "sol.sol_data_vencimento", "sol.sol_observacao",
-            "sol.sol_prescricao_tipo", "sol.sol_insumo_quant",
+            "sol.sol_prescricao_tipo", "sol.sol_insumo_quant", "sol.sol_observacao_equipe",
             "pac.pac_nome", "pac.pac_cpf", "pac.pac_avatar",
             "ins.ins_nome", "pos.pos_nome",
             // > 0 = o paciente reenviou uma versão corrigida antes da revisão
@@ -198,6 +201,8 @@ if (!/^\d+$/.test(id)) {
           "sol.sol_motivo_nao_autorizado",
 
           "sol.sol_observacao",
+          // observação da unidade ao refazer um pedido não autorizado
+          "sol.sol_observacao_equipe",
           "sol.sol_prescricao_tipo",
 
           // QUANTIDADE
@@ -402,6 +407,13 @@ async alterarStatusAutorizador(req, res) {
                 error: "Esta prescrição já foi finalizada ou não está disponível para análise."
             });
         }
+// Prescrição vencida não pode mais ser autorizada (só não autorizada)
+if (sol_status === "Autorizado" && prescricaoVencida(solicitacao.sol_data_vencimento, dataHojeBrasil())) {
+    return res.status(409).json({
+        error: `Esta prescrição venceu em ${dataBR(solicitacao.sol_data_vencimento)} e não pode mais ser autorizada.`
+    });
+}
+
 const motivoSalvo =
     sol_status === "Nao Autorizado"
         ? sol_motivo_nao_autorizado.trim()
@@ -436,6 +448,8 @@ if (!alteradas) {
         error: "Esta prescrição já foi finalizada ou não está disponível para análise."
     });
 }
+
+await notificar();
 
 const solicitacaoAtualizada = await knex("solicitacao")
     .select(

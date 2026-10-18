@@ -24,3 +24,14 @@ export async function emailEmUso(email, ignorar = null) {
   }
   return false;
 }
+
+// Número fixo do administrador logado (adm_id). Tokens emitidos antes da
+// migração de 18/10 não têm id: nesse caso ele é buscado pelo e-mail.
+export async function idDoAdmin(sessao) {
+  if (sessao?.tipo !== 'ADMIN') return null;
+  if (sessao.id) return Number(sessao.id);
+  const adm = await knex('administrador')
+    .whereRaw('LOWER(adm_email) = ?', [String(sessao.email ?? '').toLowerCase()])
+    .first('adm_id');
+  return adm?.adm_id ? Number(adm.adm_id) : null;
+}
