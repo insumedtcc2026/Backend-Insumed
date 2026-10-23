@@ -4,6 +4,7 @@
 import { test, mock, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -23,6 +24,8 @@ const db = newDb();
 db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], returns: 'text', implementation: (a, b, c) => a == null ? null : a.split(b).join(c) });
 // REGEXP_REPLACE(texto, padrão, troca, 'g') usado na matrícula
 db.public.registerFunction({ name: 'regexp_replace', args: ['text', 'text', 'text', 'text'], returns: 'text', implementation: (a, b, c, f) => a == null ? null : a.replace(new RegExp(b, f), c) });
+// gen_random_uuid() é nativo no Postgres 13+ (Neon)
+db.public.registerFunction({ name: 'gen_random_uuid', returns: 'uuid', implementation: () => randomUUID(), impure: true });
 db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
   create table pacientes (pac_id serial primary key, pac_nome text, pac_email text, pac_senha text, pac_cpf text,
@@ -60,6 +63,11 @@ db.public.none(
 const migracao3 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-18_notificacoes.sql'), 'utf8');
 db.public.none(
   migracao3.slice(migracao3.indexOf('-- @pgmem-inicio'), migracao3.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+// migração de 24/10 (código do QR Code): só o trecho marcado
+const migracao4 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-24_qrcode_agendamento.sql'), 'utf8');
+db.public.none(
+  migracao4.slice(migracao4.indexOf('-- @pgmem-inicio'), migracao4.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
 
 const knex = db.adapters.createKnex();
@@ -1232,4 +1240,66 @@ test('N6 links das notificações: ?sol_id= mostra só o item, e só se for do p
   const ag = await request(app).get('/meus-agendamentos').query({ sol_id: ids.agNotif }).set(auth(tk.pacB));
   assert.deepEqual(ag.body.itens.map((a) => a.sol_id), [ids.agNotif]);
   assert.equal((await request(app).get('/meus-agendamentos').query({ sol_id: ids.agNotif }).set(auth(tk.pacA))).body.itens.length, 0);
+});
+
+// ------------------------------------------------------------------
+// Etapa Q — Leitor de QR Code do comprovante
+// ------------------------------------------------------------------
+test('Q1 agendamento nasce com código do QR; só o paciente recebe o código', async () => {
+  await knex('insumo').insert({ ins_nome: 'Sonda Q', ins_quantidade: 10, pos_id: ids.posto1 });
+  const origem = await knex('solicitacao').insert({ pac_id: ids.pacB, pos_id: ids.posto1, sol_status: 'Autorizado', sol_insumo_quant: 0, sol_data_vencimento: amanha }).returning('sol_id');
+  const r = await request(app).post('/agendamentos').set(auth(tk.adm)).send({
+    paciente: { pac_id: ids.pacB }, posto: { pos_id: ids.posto1 }, sol_data_de_coleta: amanha,
+    itens: [{ ins_nome: 'Sonda Q', quantidade: 2 }], sol_origem_id: origem[0].sol_id,
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  ids.agQR = r.body.sol_id;
+  ids.protQR = r.body.sol_protocolo;
+  const linha = await knex('solicitacao').where('sol_id', ids.agQR).first();
+  assert.match(String(linha.sol_codigo_qr), /^[0-9a-f-]{36}$/);
+  ids.codQR = String(linha.sol_codigo_qr);
+
+  const pac = await request(app).get('/meus-agendamentos').query({ sol_id: ids.agQR }).set(auth(tk.pacB));
+  assert.equal(pac.body.itens[0].sol_codigo_qr, ids.codQR);
+  const adm = await request(app).get('/agendamentos').query({ status: 'todos', busca: ids.protQR }).set(auth(tk.adm));
+  assert.ok(adm.body.length && adm.body.every((a) => a.sol_codigo_qr === undefined), 'listagem do admin não expõe o código');
+});
+
+test('Q2 leitura do QR: formato novo, antigo, leitor com teclado ABNT2 e erros', async () => {
+  const ler = (codigo, t = tk.adm) => request(app).get('/agendamentos/qrcode').query({ codigo }).set(auth(t));
+
+  const ok = await ler(`INSUMED:${ids.protQR}:${ids.codQR}`);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.sol_id, ids.agQR);
+  assert.equal((await ler(`  insumed:${ids.protQR.toLowerCase()}:${ids.codQR.toUpperCase()} `)).body.sol_id, ids.agQR, 'maiúsculas/espaços');
+  assert.equal((await ler(`INSUMEDÇ${ids.protQR}Ç${ids.codQR}`)).body.sol_id, ids.agQR, 'leitor USB em teclado ABNT2');
+  assert.equal((await ler(ids.protQR)).body.sol_id, ids.agQR, 'comprovante antigo (só protocolo)');
+
+  assert.equal((await ler('qualquer coisa')).status, 400);
+  assert.equal((await ler('')).status, 400);
+  assert.equal((await ler(`INSUMED:${ids.protQR}:${randomUUID()}`)).status, 404, 'código inventado');
+  assert.equal((await ler(`INSUMED:AG999999:${ids.codQR}`)).status, 404, 'protocolo trocado');
+  assert.equal((await ler(`INSUMED:${ids.protQR}:${ids.codQR}`, tk.admNorte)).status, 403, 'outro posto');
+  assert.equal((await ler(`INSUMED:${ids.protQR}:${ids.codQR}`, tk.pacB)).status, 403, 'paciente não usa o leitor');
+  assert.equal((await ler(`INSUMED:${ids.protQR}:${ids.codQR}`, tk.aut)).status, 403, 'autorizador não usa o leitor');
+});
+
+test('Q3 tela de atendimento: dados mínimos, posto conferido, concluir pelo fluxo existente', async () => {
+  const r = await request(app).get(`/agendamentos/${ids.agQR}/atendimento`).set(auth(tk.adm));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.paciente.pac_nome, 'Bruno Lima');
+  assert.equal(r.body.paciente.pac_cpf_parcial, '111.***.***-35');
+  assert.equal(r.body.paciente.pac_cpf, undefined);
+  assert.equal(r.body.paciente.pac_telefone, undefined);
+  assert.deepEqual(r.body.insumos.map((i) => [i.ins_nome, i.quantidade, i.estoque]), [['Sonda Q', 2, 10]]);
+  assert.equal(r.body.prescricao_vencida, false);
+
+  assert.equal((await request(app).get(`/agendamentos/${ids.agQR}/atendimento`).set(auth(tk.admNorte))).status, 403);
+  assert.equal((await request(app).get(`/agendamentos/${ids.agQR}/atendimento`).set(auth(tk.pacB))).status, 403);
+  assert.equal((await request(app).get(`/agendamentos/${ids.sol1}/atendimento`).set(auth(tk.adm))).status, 404, 'prescrição não é agendamento');
+
+  assert.equal((await request(app).patch(`/agendamentos/${ids.agQR}/concluir`).set(auth(tk.adm))).status, 200);
+  const depois = await request(app).get(`/agendamentos/${ids.agQR}/atendimento`).set(auth(tk.adm));
+  assert.equal(depois.body.status, 'concluido');
+  assert.equal(depois.body.insumos[0].estoque, 8);
 });

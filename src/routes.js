@@ -18,6 +18,7 @@ import autorizarPaciente from "./middleware/autorizarPaciente.js";
 import { idValido } from "./utils/validacoes.js";
 import notificacoesControllers from "./controllers/notificacoesControllers.js";
 import autorizarCron from "./middleware/autorizarCron.js";
+import { limiteLeituraQR } from "./middleware/limiteLeituraQR.js";
 
 
 const routes = express.Router();
@@ -116,6 +117,10 @@ routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControll
 
 // admin de posto só age nos agendamentos do próprio posto (validarAcessoSolicitacao);
 // o admin universal age em todos
+// leitor de QR Code do comprovante (texto lido em ?codigo=) e tela de
+// atendimento aberta por ele (só concluir/cancelar)
+routes.get('/agendamentos/qrcode', authorization, autorizarAdmin, limiteLeituraQR, agendamentosControllers.buscarPorQRCode);
+routes.get('/agendamentos/:id/atendimento', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.dadosAtendimento);
 routes.patch('/agendamentos/:id/concluir', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.concluir);
 routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.cancelar);
 routes.patch('/agendamentos/:id/recado', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.salvarRecado);
@@ -212,4 +217,4 @@ routes.patch('/notificacoes/:id/lida', authorization, notificacoesControllers.ma
 // Tarefa diária (Vercel Cron): lembretes, pendências, não compareceu, vencidas
 routes.get('/tarefas/diaria', autorizarCron, notificacoesControllers.tarefaDiaria);
 
-export default routes;
+export default routes;
