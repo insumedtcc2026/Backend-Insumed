@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import knex from '../database/index.js';
-import { dataHojeBrasil, idValido, validarDataISO, validarMotivo } from '../utils/validacoes.js';
+import { cpfParcial, dataHojeBrasil, idValido, lerCodigoQR, validarDataISO, validarMotivo } from '../utils/validacoes.js';
+import { registrarFalhaLeituraQR } from '../middleware/limiteLeituraQR.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
 import { dataBR, isoData, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_ATIVO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
 import { idDoAdmin } from '../utils/contas.js';
@@ -32,6 +34,8 @@ function agruparPorAgendamento(resultado) {
                 sol_recado: linha.sol_recado ?? null,
                 // data anterior quando o admin remarcou (aviso "remarcado")
                 sol_data_anterior: linha.sol_data_anterior ?? null,
+                // só vem nas rotas do próprio paciente (monta o QR do comprovante)
+                ...(linha.sol_codigo_qr !== undefined && { sol_codigo_qr: linha.sol_codigo_qr }),
 
                 paciente: {
                     pac_id: linha.pac_id,
@@ -94,7 +98,8 @@ const SELECT_AGENDAMENTO = [
 
 const TAMANHO_MAX_NOME_INSUMO = 100;
 
-function baseQueryAgendamentos() {
+// comCodigoQR: inclui o código secreto do QR Code (só nas rotas do paciente)
+function baseQueryAgendamentos({ comCodigoQR = false } = {}) {
     return knex('solicitacao as sol')
         .leftJoin('pacientes as pac', 'pac.pac_id', 'sol.pac_id')
         // permite manter as solicitações mesmo quando alguma informação relacionada não existe
@@ -104,14 +109,14 @@ function baseQueryAgendamentos() {
         // a tabela solicitacao também guarda pedidos de prescrição (outro
         // status: Pendente/Aprovado/Reenvio) — nunca misturar com agendamento
         .whereIn('sol.sol_status', STATUS_AGENDAMENTO)
-        .select(SELECT_AGENDAMENTO);
+        .select(comCodigoQR ? [...SELECT_AGENDAMENTO, 'sol.sol_codigo_qr'] : SELECT_AGENDAMENTO);
 }
 
 // Paginação feita no banco: primeiro conta e busca só os ids da página
 // (um por agendamento), depois os dados completos desses ids (que vêm
 // "achatados", uma linha por insumo). Assim a página não carrega o
 // histórico inteiro do posto ou do paciente.
-async function listarPaginado(query, filtros, ordenar, maximoPorPagina = 100) {
+async function listarPaginado(query, filtros, ordenar, maximoPorPagina = 100, opcoes = {}) {
     const porPagina = Math.min(Math.max(Number(query.porPagina) || 20, 1), maximoPorPagina);
     const pedida = Math.max(1, Number(query.page) || 1);
 
@@ -131,7 +136,7 @@ async function listarPaginado(query, filtros, ordenar, maximoPorPagina = 100) {
         .offset((paginaAtual - 1) * porPagina)
         .then((linhas) => linhas.map((l) => l.sol_id));
 
-    const linhas = ids.length ? await baseQueryAgendamentos().whereIn('sol.sol_id', ids) : [];
+    const linhas = ids.length ? await baseQueryAgendamentos(opcoes).whereIn('sol.sol_id', ids) : [];
     const porId = new Map(agruparPorAgendamento(linhas).map((a) => [a.sol_id, a]));
 
     return { itens: ids.map((id) => porId.get(id)).filter(Boolean), paginaAtual, totalPaginas, total };
@@ -359,7 +364,8 @@ export default {
                     sol_data_de_coleta,
                     sol_status: 'agendado',
                     sol_insumo_quant: 0,
-                    sol_origem_id: origemId
+                    sol_origem_id: origemId,
+                    sol_codigo_qr: randomUUID()
                 })
                 .returning('sol_id');
 
@@ -795,6 +801,99 @@ export default {
     },
 
 
+    // LEITOR DE QR CODE (admin): texto lido do comprovante -> sol_id.
+    // Aceita "INSUMED:AG000042:<código>" e, dos comprovantes antigos, só
+    // "AG000042". O admin de posto só encontra agendamentos do próprio posto.
+    async buscarPorQRCode(req, res) {
+        try {
+            const lido = lerCodigoQR(req.query.codigo);
+            if (!lido) {
+                registrarFalhaLeituraQR(req);
+                return res.status(400).send({ message: 'QR Code não reconhecido. Use o QR do comprovante de agendamento do INSUMED.' });
+            }
+
+            const ag = await knex('solicitacao')
+                .whereIn('sol_status', STATUS_AGENDAMENTO)
+                .modify((qb) => {
+                    if (lido.codigo) qb.where('sol_codigo_qr', lido.codigo);
+                    else qb.where('sol_protocolo', lido.protocolo);
+                })
+                .first('sol_id', 'sol_protocolo', 'sol_status', 'pos_id');
+
+            // código certo com protocolo trocado também é "não encontrado"
+            if (!ag || ag.sol_protocolo !== lido.protocolo) {
+                registrarFalhaLeituraQR(req);
+                return res.status(404).send({ message: 'Nenhum agendamento encontrado para este QR Code.' });
+            }
+
+            const admin = req.session;
+            if (!admin.tp_universal && admin.posto_id !== ag.pos_id) {
+                return res.status(403).send({ message: 'Este agendamento é de outra unidade.' });
+            }
+
+            return res.status(200).send({ sol_id: ag.sol_id, sol_protocolo: ag.sol_protocolo, status: ag.sol_status });
+
+        } catch (error) {
+            console.error('Erro ao ler QR Code:', error);
+            return res.status(500).send({ message: 'Erro ao ler o QR Code' });
+        }
+    },
+
+
+    // TELA DE ATENDIMENTO (admin, aberta pelo leitor de QR Code).
+    // Só o necessário para conferir e concluir/cancelar no balcão: sem
+    // telefone, endereço, prescrição nem histórico. O acesso ao posto já foi
+    // conferido por validarAcessoSolicitacao.
+    async dadosAtendimento(req, res) {
+        try {
+            const { id } = req.params;
+
+            const linhas = await knex('solicitacao as sol')
+                .leftJoin('pacientes as pac', 'pac.pac_id', 'sol.pac_id')
+                .leftJoin('postosdesaude as pos', 'pos.pos_id', 'sol.pos_id')
+                .leftJoin('coleta as col', 'col.sol_id', 'sol.sol_id')
+                .leftJoin('insumo as ins', 'ins.ins_id', 'col.ins_id')
+                .leftJoin('solicitacao as ori', 'ori.sol_id', 'sol.sol_origem_id')
+                .where('sol.sol_id', id)
+                .whereIn('sol.sol_status', STATUS_AGENDAMENTO)
+                .select(
+                    'sol.sol_id', 'sol.sol_protocolo', 'sol.sol_data_de_coleta', 'sol.sol_status',
+                    'sol.sol_motivo_cancelamento',
+                    'pac.pac_nome', 'pac.pac_cpf', 'pos.pos_nome',
+                    'ins.ins_id', 'ins.ins_nome', 'ins.ins_quantidade', 'col.quantidade',
+                    'ori.sol_data_vencimento'
+                );
+
+            if (!linhas.length) {
+                return res.status(404).send({ message: 'Agendamento não encontrado' });
+            }
+
+            const [ag] = linhas;
+            return res.status(200).send({
+                sol_id: ag.sol_id,
+                sol_protocolo: ag.sol_protocolo,
+                sol_data_de_coleta: isoData(ag.sol_data_de_coleta),
+                status: ag.sol_status,
+                sol_motivo_cancelamento: ag.sol_motivo_cancelamento ?? null,
+                paciente: { pac_nome: ag.pac_nome, pac_cpf_parcial: cpfParcial(ag.pac_cpf) },
+                posto: { pos_nome: ag.pos_nome },
+                prescricao_vencida: prescricaoVencida(ag.sol_data_vencimento, dataHojeBrasil()),
+                hoje: dataHojeBrasil(),
+                insumos: linhas.filter((l) => l.ins_id !== null).map((l) => ({
+                    ins_id: l.ins_id,
+                    ins_nome: l.ins_nome,
+                    quantidade: Number(l.quantidade),
+                    estoque: Number(l.ins_quantidade)
+                }))
+            });
+
+        } catch (error) {
+            console.error('Erro ao buscar dados do atendimento:', error);
+            return res.status(500).send({ message: 'Erro ao buscar o agendamento' });
+        }
+    },
+
+
     // MEUS AGENDAMENTOS (visão do PACIENTE, paginado)
     async listarMeusAgendamentos(req, res) {
         try {
@@ -826,7 +925,7 @@ export default {
             };
 
             return res.status(200).send(
-                await listarPaginado({ page: req.query.page || 1, porPagina: req.query.porPagina || 4 }, filtros, ordenar, 50)
+                await listarPaginado({ page: req.query.page || 1, porPagina: req.query.porPagina || 4 }, filtros, ordenar, 50, { comCodigoQR: true })
             );
 
         } catch (error) {
@@ -850,7 +949,7 @@ export default {
                 return res.status(403).send({ error: 'Rota exclusiva de paciente' });
             }
 
-            const resultado = await baseQueryAgendamentos()
+            const resultado = await baseQueryAgendamentos({ comCodigoQR: true })
                 .where('sol.pac_id', req.session.id)
                 .where('sol.sol_status', 'agendado')
                 // "hoje" no fuso de Brasília (o banco roda em UTC)

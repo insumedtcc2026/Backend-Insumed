@@ -149,6 +149,21 @@ Depois de publicar, os administradores precisam **sair e entrar de novo**
 uma vez só para o token levar o `adm_id` (até lá o backend os reconhece pelo
 e-mail, então nada quebra).
 
+### 2.3 Migração de 24/10 (leitor de QR Code)
+
+Rode `database/migracoes/2026-10-24_qrcode_agendamento.sql`. Ela cria a
+coluna `sol_codigo_qr` (código aleatório do QR Code do comprovante) e
+preenche o código de todos os agendamentos que já existem. Comprovantes
+antigos, com QR só do protocolo, continuam sendo aceitos pelo leitor.
+
+Conferência:
+
+```sql
+SELECT COUNT(*) FROM solicitacao
+ WHERE sol_codigo_qr IS NULL
+   AND sol_status IN ('agendado','concluido','cancelado','nao_compareceu');  -- deve responder 0
+```
+
 ---
 
 ## 3. Backend — juntar no `main` e publicar

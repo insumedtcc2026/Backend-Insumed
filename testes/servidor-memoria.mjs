@@ -8,6 +8,7 @@
 //   autorizador  aut.teste@insumed.test
 import { mock } from 'node:test';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -25,6 +26,8 @@ const db = newDb();
 db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], returns: 'text', implementation: (a, b, c) => (a == null ? null : a.split(b).join(c)) });
 // REGEXP_REPLACE(texto, padrão, troca, 'g') usado na matrícula
 db.public.registerFunction({ name: 'regexp_replace', args: ['text', 'text', 'text', 'text'], returns: 'text', implementation: (a, b, c, f) => a == null ? null : a.replace(new RegExp(b, f), c) });
+// gen_random_uuid() é nativo no Postgres 13+ (Neon)
+db.public.registerFunction({ name: 'gen_random_uuid', returns: 'uuid', implementation: () => randomUUID(), impure: true });
 db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
   create table pacientes (pac_id serial primary key, pac_nome text, pac_email text, pac_senha text, pac_cpf text,
@@ -54,6 +57,11 @@ db.public.none(
 const migracao3 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-18_notificacoes.sql'), 'utf8');
 db.public.none(
   migracao3.slice(migracao3.indexOf('-- @pgmem-inicio'), migracao3.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+// migração de 24/10 (código do QR Code): só o trecho marcado
+const migracao4 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-24_qrcode_agendamento.sql'), 'utf8');
+db.public.none(
+  migracao4.slice(migracao4.indexOf('-- @pgmem-inicio'), migracao4.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
 
 const knex = db.adapters.createKnex();
@@ -94,7 +102,7 @@ await sol({ pac_id: bruno.pac_id, pos_id: p1.pos_id, sol_status: 'Nao Autorizado
 // agendamentos (fluxo antigo, sem vínculo)
 for (const [pac, status, motivo, data] of [[ana.pac_id, 'agendado', null, amanha], [bruno.pac_id, 'concluido', null, amanha], [ana.pac_id, 'cancelado', null, amanha], [bruno.pac_id, 'agendado', null, hojeBR], [ana.pac_id, 'agendado', null, hojeBR], [bruno.pac_id, 'concluido', null, hojeBR]]) {
   const id = await sol({ pac_id: pac, pos_id: p1.pos_id, sol_status: status, sol_data_de_coleta: data, sol_prescricao: null, sol_prescricao_tipo: null, sol_motivo_cancelamento: motivo });
-  await knex('solicitacao').where('sol_id', id).update({ sol_protocolo: `AG${String(id).padStart(6, '0')}` });
+  await knex('solicitacao').where('sol_id', id).update({ sol_protocolo: `AG${String(id).padStart(6, '0')}`, sol_codigo_qr: randomUUID() });
   await knex('coleta').insert({ sol_id: id, ins_id: fralda.ins_id, quantidade: 5 });
 }
 

@@ -234,3 +234,26 @@ export function mensagemErroBanco(error) {
   if (error?.code === "23502") return "Algum campo obrigatório ficou em branco.";
   return null;
 }
+
+// Texto lido do QR Code do comprovante (câmera, leitor USB ou digitado).
+// Formato atual: "INSUMED:AG000042:<uuid>". Comprovantes antigos só têm o
+// protocolo ("AG000042"). Leitores USB configurados com teclado americano
+// num teclado ABNT2 trocam ":" por "Ç" ou ";", então os três são aceitos.
+// Devolve { protocolo, codigo } (codigo null no formato antigo) ou null.
+const REGEX_QR = /^INSUMED[:;Ç](AG\d{6,10})[:;Ç]([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})$/;
+const REGEX_PROTOCOLO = /^AG\d{6,10}$/;
+
+export function lerCodigoQR(texto) {
+  if (typeof texto !== "string" || texto.length > 120) return null;
+  const valor = texto.trim().toUpperCase();
+  const completo = REGEX_QR.exec(valor);
+  if (completo) return { protocolo: completo[1], codigo: completo[2].toLowerCase() };
+  if (REGEX_PROTOCOLO.test(valor)) return { protocolo: valor, codigo: null };
+  return null;
+}
+
+// 529.982.247-25 -> 529.***.***-25 (tela de atendimento no balcão)
+export function cpfParcial(cpf) {
+  const d = somenteDigitos(cpf);
+  return d.length === 11 ? `${d.slice(0, 3)}.***.***-${d.slice(9)}` : null;
+}
