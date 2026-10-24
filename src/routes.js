@@ -25,6 +25,7 @@ import agendaControllers from "./controllers/agendaControllers.js";
 import participacaoControllers from "./controllers/participacaoControllers.js";
 import autorizadosControllers from "./controllers/autorizadosControllers.js";
 import meusInsumosControllers from "./controllers/meusInsumosControllers.js";
+import gestaoControllers from "./controllers/gestaoControllers.js";
 
 
 const routes = express.Router();
@@ -90,6 +91,9 @@ routes.get('/painel/admin', authorization, autorizarAdmin, painelControllers.pai
 // Home do autorizador
 routes.get('/painel/autorizador', authorization, autorizarAut, autorizadorControllers.painelAutorizador);
 // atividades da unidade (histórico geral de quem fez o quê)
+// previsão de demanda por insumo (30, 60 ou 90 dias)
+routes.get('/indicadores/previsao', authorization, autorizarAdmin, gestaoControllers.previsao);
+
 routes.get('/atividades', authorization, autorizarAdmin, painelControllers.atividades);
 
 routes.post('/login', limiteLogin, administradorControllers.loginGeral)
@@ -150,6 +154,8 @@ routes.patch(
 
 //agendamento
 routes.get('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.listar);
+// lista de separação do dia (por insumo e por paciente)
+routes.get('/agendamentos/separacao', authorization, autorizarAdmin, gestaoControllers.separacao);
 routes.get('/agendamentos/datas-sugeridas', authorization, autorizarAdmin, painelControllers.datasSugeridas);
 routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.criar);
 

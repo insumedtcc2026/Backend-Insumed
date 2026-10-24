@@ -2025,3 +2025,103 @@ test('U3 meus insumos: só prescrições autorizadas e válidas, com "indisponí
   assert.ok(!(await request(app).get('/meus-insumos').set(auth(tk.pacA))).body.some((x) => x.sol_id === sol));
   assert.equal((await request(app).get('/meus-insumos').set(auth(tk.adm))).status, 403);
 });
+
+// ------------------------------------------------------------------
+// Etapa 5: lista de separação do dia e previsão de demanda
+// ------------------------------------------------------------------
+
+// Posto Sul, isolado dos outros testes, com coletas e prescrições montadas no banco
+const sul = {};
+const agSul = async ({ pac_id, data, turno = 'manha', status = 'agendado', presenca = null, origem = null, itens }) => {
+  const [s] = await knex('solicitacao').insert({
+    pac_id, pos_id: sul.pos_id, sol_status: status, sol_data_de_coleta: data, sol_turno: turno,
+    sol_presenca: presenca, sol_origem_id: origem, sol_insumo_quant: 0,
+  }).returning('sol_id');
+  await knex('solicitacao').where('sol_id', s.sol_id).update({ sol_protocolo: `AG${String(s.sol_id).padStart(6, '0')}` });
+  await knex('coleta').insert(itens.map(([ins_id, quantidade]) => ({ sol_id: s.sol_id, ins_id, quantidade })));
+  return s.sol_id;
+};
+const prescSul = async ({ periodicidade = null, vencimento, itens }) => {
+  const [s] = await knex('solicitacao').insert({
+    pac_id: ids.pacA, pos_id: sul.pos_id, sol_status: 'Autorizado', sol_data_vencimento: vencimento,
+    sol_periodicidade_dias: periodicidade, sol_insumo_quant: 0,
+  }).returning('sol_id');
+  await knex('solicitacao_item').insert(itens.map(([ins_id, q]) => ({ sol_id: s.sol_id, ins_id, sit_quantidade: q })));
+  return s.sol_id;
+};
+
+test('V1 lista de separação: total por insumo e lista por paciente, só da unidade', async () => {
+  const [p] = await knex('postosdesaude').insert({ pos_nome: 'Posto Sul' }).returning('pos_id');
+  sul.pos_id = p.pos_id;
+  sul.tk = jwt.sign({ email: 'sul@teste.com', posto_id: sul.pos_id, tp_universal: false, tipo: 'ADMIN' },
+    process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+  sul.universal = jwt.sign({ email: 'geral@teste.com', posto_id: null, tp_universal: true, tipo: 'ADMIN' },
+    process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+  const [luva] = await knex('insumo').insert({ ins_nome: 'Luva', ins_quantidade: 10, pos_id: sul.pos_id }).returning('ins_id');
+  const [ser] = await knex('insumo').insert({ ins_nome: 'Seringa', ins_quantidade: 100, pos_id: sul.pos_id }).returning('ins_id');
+  sul.luva = luva.ins_id; sul.seringa = ser.ins_id;
+
+  await agSul({ pac_id: ids.pacB, data: amanha, turno: 'tarde', presenca: 'nao_vou', itens: [[sul.luva, 3], [sul.seringa, 2]] });
+  await agSul({ pac_id: ids.pacA, data: amanha, itens: [[sul.luva, 4]] });
+  await agSul({ pac_id: ids.pacA, data: amanha, status: 'concluido', itens: [[sul.seringa, 1]] });
+  await agSul({ pac_id: ids.pacA, data: amanha, status: 'cancelado', itens: [[sul.luva, 50]] });
+
+  const r = await request(app).get(`/agendamentos/separacao?data=${amanha}`).set(auth(sul.tk));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data, amanha);
+  assert.equal(r.body.unidades.length, 1);
+  const u = r.body.unidades[0];
+  assert.equal(u.pos_nome, 'Posto Sul');
+  assert.deepEqual(u.por_insumo.map((i) => [i.ins_nome, i.separar, i.nao_vai, i.entregue]),
+    [['Luva', 4, 3, 0], ['Seringa', 0, 2, 1]]);
+  assert.deepEqual(u.por_paciente.map((x) => [x.turno, x.primeiro_nome, x.situacao]),
+    [['manha', 'Ana', 'separar'], ['manha', 'Ana', 'entregue'], ['tarde', 'Bruno', 'nao_vai']]);
+  assert.equal(u.por_paciente[0].pac_cpf, undefined, 'a lista impressa não leva CPF');
+
+  // admin de outra unidade não vê; universal escolhe a unidade
+  const outro = await request(app).get(`/agendamentos/separacao?data=${amanha}`).set(auth(tk.adm));
+  assert.ok(!outro.body.unidades.some((x) => x.pos_id === sul.pos_id));
+  const geral = await request(app).get(`/agendamentos/separacao?data=${amanha}&pos_id=${sul.pos_id}`).set(auth(sul.universal));
+  assert.deepEqual(geral.body.unidades.map((x) => x.pos_id), [sul.pos_id]);
+
+  assert.equal((await request(app).get('/agendamentos/separacao?data=31/12/2026').set(auth(sul.tk))).status, 400);
+  assert.equal((await request(app).get(`/agendamentos/separacao?data=${amanha}`).set(auth(tk.pacA))).status, 403);
+});
+
+test('V2 previsão de demanda: agendadas + ciclos futuros + a agendar + média das avulsas', async () => {
+  // uso contínuo a cada 10 dias, última retirada há 5 dias, vence em 25 dias:
+  // ciclos em +5, +15 e +25 (2 luvas cada)
+  const continua = await prescSul({ periodicidade: 10, vencimento: somar(hoje, 25), itens: [[sul.luva, 2]] });
+  await agSul({ pac_id: ids.pacA, data: somar(hoje, -5), status: 'concluido', origem: continua, itens: [[sul.luva, 2]] });
+  // autorizada e ainda não agendada: 5 seringas
+  await prescSul({ vencimento: somar(hoje, 60), itens: [[sul.seringa, 5]] });
+  // avulsa concluída há 10 dias: 9 seringas em 90 dias = 3 em 30 dias
+  await agSul({ pac_id: ids.pacB, data: somar(hoje, -10), status: 'concluido', itens: [[sul.seringa, 9]] });
+
+  const r = await request(app).get('/indicadores/previsao?dias=30').set(auth(sul.tk));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.dias, 30);
+  const [luva, seringa] = r.body.insumos;
+  assert.equal(luva.ins_nome, 'Luva', 'ordenado pela falta');
+  assert.deepEqual([luva.estoque, luva.agendado, luva.recorrente, luva.a_agendar, luva.avulso, luva.necessidade, luva.falta],
+    [10, 7, 6, 0, 0, 13, 3]);
+  // 4 + 3 amanhã, +2 em +5 = 9, +2 em +15 = 11 > 10
+  assert.equal(luva.acaba_em, somar(hoje, 15));
+  assert.deepEqual([seringa.agendado, seringa.a_agendar, seringa.avulso, seringa.necessidade, seringa.falta, seringa.acaba_em],
+    [2, 5, 3, 10, 0, null]);
+
+  // 60 dias: o vencimento corta os ciclos (continua 6 luvas) e a média dobra
+  const r60 = await request(app).get('/indicadores/previsao?dias=60').set(auth(sul.tk));
+  const s60 = r60.body.insumos.find((i) => i.ins_id === sul.seringa);
+  assert.equal(r60.body.insumos.find((i) => i.ins_id === sul.luva).recorrente, 6);
+  assert.equal(s60.avulso, 6);
+
+  // cada admin vê só a própria unidade; o universal vê todas
+  const doCentro = await request(app).get('/indicadores/previsao?dias=30').set(auth(tk.adm));
+  assert.ok(doCentro.body.insumos.every((i) => i.pos_id === ids.posto1));
+  const todas = await request(app).get('/indicadores/previsao?dias=30').set(auth(sul.universal));
+  assert.ok(new Set(todas.body.insumos.map((i) => i.pos_id)).size >= 2);
+
+  assert.equal((await request(app).get('/indicadores/previsao?dias=45').set(auth(sul.tk))).status, 400);
+  assert.equal((await request(app).get('/indicadores/previsao?dias=30').set(auth(tk.pacA))).status, 403);
+});

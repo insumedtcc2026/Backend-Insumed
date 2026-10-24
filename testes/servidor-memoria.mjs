@@ -152,5 +152,21 @@ await knex('solicitacao_item').insert([
   { sol_id: continua, ins_id: curativo.ins_id, sit_quantidade: 5 },
 ]);
 
+// etapa 5: retiradas avulsas dos últimos meses (média da previsão), um
+// paciente que avisou que não vai amanhã e o estoque da UBS Vila Nova
+const diasAtras = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+for (const [n, qtd] of [[12, 30], [35, 25], [61, 35], [80, 20]]) {
+  const id = await sol({ pac_id: bruno.pac_id, pos_id: p1.pos_id, sol_status: 'concluido', sol_data_de_coleta: diasAtras(n), sol_prescricao: null, sol_prescricao_tipo: null });
+  await knex('solicitacao').where('sol_id', id).update({ sol_protocolo: `AG${String(id).padStart(6, '0')}` });
+  await knex('coleta').insert({ sol_id: id, ins_id: fralda.ins_id, quantidade: qtd });
+}
+const naoVai = await sol({ pac_id: bruno.pac_id, pos_id: p1.pos_id, sol_status: 'agendado', sol_data_de_coleta: amanha, sol_turno: 'tarde', sol_presenca: 'nao_vou', sol_prescricao: null, sol_prescricao_tipo: null });
+await knex('solicitacao').where('sol_id', naoVai).update({ sol_protocolo: `AG${String(naoVai).padStart(6, '0')}`, sol_codigo_qr: randomUUID() });
+await knex('coleta').insert([{ sol_id: naoVai, ins_id: fralda.ins_id, quantidade: 10 }, { sol_id: naoVai, ins_id: curativo.ins_id, quantidade: 2 }]);
+await knex('insumo').insert([
+  { ins_nome: 'Fralda Geriátrica G', ins_quantidade: 180, ins_marca: 'Bigfral', pos_id: p2.pos_id },
+  { ins_nome: 'Luva de Procedimento M', ins_quantidade: 300, ins_marca: 'Descarpack', pos_id: p2.pos_id },
+]);
+
 await import(pathToFileURL(path.join(BACKEND, 'src/server.js')).href);
 console.log('Backend local de teste pronto (pg-mem) em http://localhost:3344');
