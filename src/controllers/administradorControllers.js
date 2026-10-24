@@ -67,6 +67,10 @@ const PERFIS_LOGIN = [
       pac_endereco: p.pac_endereco,
       pac_sexo: p.pac_sexo,
       pac_raca: p.pac_raca,
+      // atendimento prioritário declarado (etapa 3)
+      pac_pcd: Boolean(p.pac_pcd),
+      pac_gestante: Boolean(p.pac_gestante),
+      pac_prioridade_conferida: p.pac_prioridade_conferida ?? null,
       tipo: 'PACIENTE',
     }),
   },
