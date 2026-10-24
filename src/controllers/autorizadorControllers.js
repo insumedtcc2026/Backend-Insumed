@@ -1,11 +1,8 @@
 import knex from '../database/index.js';
-import bcrypt from 'bcrypt';
 import {
-  coletarErros, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome, somenteDigitos,
-  validarConfirmacaoSenha, validarCPF, validarEmail, validarNome, validarSenha,
-  validarMotivo, validarTelefone, whereCpf, mensagemErroBanco, validarDataISO,
+  validarMotivo, mensagemErroBanco, validarDataISO,
 } from '../utils/validacoes.js';
-import { emailEmUso } from '../utils/contas.js';
+import { cadastrarComConvite } from '../utils/equipe.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
 import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
 import { COLUNA_VERSOES, comVersaoAnterior, numerarVersoes, versoesJoin } from '../utils/versoes.js';
@@ -483,59 +480,12 @@ return res.status(200).json({
   // CRIAR AUTORIZADOR
  
 
+  // Cadastro pelo link do convite gerado pelo admin universal.
   async createautorizador(req, res) {
-
     try {
-
-      const {
-        nome,
-        email,
-        telefone,
-        senha,
-        confirmacao_senha,
-        cpf
-      } = req.body ?? {};
-
-      const erros = coletarErros(
-        validarNome(nome),
-        validarEmail(email),
-        validarTelefone(telefone),
-        validarCPF(cpf),
-        validarSenha(senha),
-        validarConfirmacaoSenha(senha, confirmacao_senha),
-      );
-      if (erros.length) {
-        return res.status(400).json({ sucesso: false, erros });
-      }
-
-      const conflitos = [];
-      if (await emailEmUso(email)) conflitos.push('E-mail já cadastrado.');
-
-      const cpfExiste = await knex('autorizador')
-        .whereRaw(...whereCpf('aut_cpf'), [somenteDigitos(cpf)])
-        .first('aut_cpf');
-      if (cpfExiste) conflitos.push('CPF já cadastrado como autorizador.');
-
-      if (conflitos.length) {
-        return res.status(409).json({ sucesso: false, erros: conflitos });
-      }
-
-      const hashSenha = await bcrypt.hash(senha, 10);
-
-      await knex('autorizador').insert({
-        aut_nome: normalizarNome(nome),
-        aut_email: normalizarEmail(email),
-        aut_tel: formatarTelefone(telefone),
-        aut_senha: hashSenha,
-        aut_cpf: formatarCPF(cpf)
-      });
-
-      return res.status(201).send({
-        message: 'Autorizador criado com sucesso'
-      });
-
+      const { status, body } = await cadastrarComConvite('AUTORIZADOR', req.body ?? {});
+      return res.status(status).send(body);
     } catch (error) {
-
       console.error('Erro ao criar autorizador:', error);
       const doBanco = mensagemErroBanco(error);
       if (doBanco) return res.status(400).json({ sucesso: false, erros: [doBanco] });
@@ -543,9 +493,7 @@ return res.status(200).json({
       return res.status(500).send({
         erro: 'Erro ao criar autorizador. Tente novamente.'
       });
-
     }
-
   }
 
 };

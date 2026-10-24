@@ -7,6 +7,7 @@ import { dataBR, isoData, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAME
 import { idDoAdmin } from '../utils/contas.js';
 import { notificar } from '../notificacoes/processador.js';
 import { avisarEstoque } from '../notificacoes/estoque.js';
+import { reservados } from '../utils/estoque.js';
 
 const TAMANHO_MAX_RECADO = 300;
 
@@ -277,12 +278,19 @@ export default {
                 return falhar(400, 'Nenhum insumo informado');
             }
 
+            // cada item vem com o ins_id (escolhido no estoque da unidade) ou,
+            // em clientes antigos, só com o nome do insumo
             for (const item of itens) {
+                const temId = item?.ins_id !== undefined && item?.ins_id !== null && item?.ins_id !== '';
                 const nome = typeof item?.ins_nome === 'string' ? item.ins_nome.trim() : '';
                 const quantidade = Number(item?.quantidade);
 
-                if (!nome || !Number.isFinite(quantidade)) {
+                if ((!temId && !nome) || !Number.isFinite(quantidade)) {
                     return falhar(400, 'Cada insumo precisa de nome e quantidade');
+                }
+
+                if (temId && !idValido(item.ins_id)) {
+                    return falhar(400, 'Insumo inválido');
                 }
 
                 if (nome.length > TAMANHO_MAX_NOME_INSUMO) {
@@ -290,7 +298,7 @@ export default {
                 }
 
                 if (!Number.isInteger(quantidade) || quantidade <= 0) {
-                    return falhar(400, `Quantidade inválida para "${nome}". Informe um número inteiro maior que zero`);
+                    return falhar(400, `Quantidade inválida para "${nome || 'o insumo'}". Informe um número inteiro maior que zero`);
                 }
             }
 
@@ -355,6 +363,54 @@ export default {
                 }
             }
 
+            // INSUMOS DO ESTOQUE DA UNIDADE
+            // O insumo tem de ser da unidade do agendamento: assim a baixa na
+            // conclusão sai do estoque certo. Nada é criado por aqui.
+            const porInsumo = new Map();
+            for (const item of itens) {
+                const temId = item?.ins_id !== undefined && item?.ins_id !== null && item?.ins_id !== '';
+                const nome = typeof item?.ins_nome === 'string' ? item.ins_nome.trim() : '';
+                const consulta = trx('insumo').where('pos_id', pos_id);
+                if (temId) consulta.where('ins_id', Number(item.ins_id));
+                else consulta.whereRaw('LOWER(TRIM(ins_nome)) = LOWER(?)', [nome]).orderBy('ins_id');
+                const insumo = await consulta.first('ins_id', 'ins_nome', 'ins_quantidade');
+
+                if (!insumo) {
+                    return falhar(400, `${nome ? `"${nome}"` : 'Este insumo'} não está cadastrado no estoque de ${postoExiste.pos_nome}. Cadastre o insumo antes de agendar.`);
+                }
+
+                // o mesmo insumo em duas linhas vira uma só, com a soma
+                const anterior = porInsumo.get(insumo.ins_id);
+                porInsumo.set(insumo.ins_id, {
+                    ...insumo,
+                    quantidade: (anterior?.quantidade ?? 0) + Number(item.quantidade),
+                });
+            }
+
+            // ESTOQUE RESERVADO: o que já está prometido em outras coletas
+            // agendadas não está livre. Faltando, o admin precisa confirmar
+            // (confirmar_sem_estoque), porque o insumo pode chegar até a data.
+            const reserva = await reservados([...porInsumo.keys()], { db: trx });
+            const faltando = [...porInsumo.values()]
+                .map((i) => ({
+                    ins_id: i.ins_id,
+                    ins_nome: i.ins_nome,
+                    pedido: i.quantidade,
+                    disponivel: Math.max(0, Number(i.ins_quantidade) - (reserva.get(Number(i.ins_id)) ?? 0)),
+                }))
+                .filter((i) => i.pedido > i.disponivel);
+
+            if (faltando.length && req.body?.confirmar_sem_estoque !== true) {
+                await trx.rollback();
+                return res.status(409).send({
+                    codigo: 'ESTOQUE_INSUFICIENTE',
+                    message: 'Estoque disponível insuficiente: ' +
+                        faltando.map((i) => `${i.ins_nome} (pedido ${i.pedido}, disponível ${i.disponivel})`).join(', ') +
+                        '. Confirme para agendar mesmo assim.',
+                    itens: faltando,
+                });
+            }
+
             // CRIAR SOLICITAÇÃO
 
             const resultado = await trx('solicitacao')
@@ -382,36 +438,10 @@ export default {
                 .where('sol_id', sol_id)
                 .update({ sol_protocolo: protocolo });
 
-            // CRIAR ITENS DA COLETA
-            // O admin digita o nome do produto (não escolhe um já
-            // cadastrado). Por isso, pra cada item: se já existir um
-            // insumo com esse nome (ignorando maiúsculas/minúsculas),
-            // reaproveita o ins_id dele; senão, cria um insumo novo.
+            // CRIAR ITENS DA COLETA (insumos já conferidos acima)
 
-            const linhasColeta = [];
-
-            for (const item of itens) {
-                const nome = String(item.ins_nome).trim();
-
-                let insumoExistente = await trx('insumo')
-                    .whereRaw('LOWER(ins_nome) = LOWER(?)', [nome])
-                    .first();
-
-                let ins_id;
-
-                if (insumoExistente) {
-                    ins_id = insumoExistente.ins_id;
-                } else {
-                    const novoInsumo = await trx('insumo')
-                        .insert({ ins_nome: nome, ins_quantidade: 0 })
-                        .returning('ins_id');
-
-                    ins_id =
-                        typeof novoInsumo[0] === 'object' ? novoInsumo[0].ins_id : novoInsumo[0];
-                }
-
-                linhasColeta.push({ sol_id, ins_id, quantidade: Number(item.quantidade) });
-            }
+            const linhasColeta = [...porInsumo.values()]
+                .map((i) => ({ sol_id, ins_id: i.ins_id, quantidade: i.quantidade }));
 
             await trx('coleta').insert(linhasColeta);
 

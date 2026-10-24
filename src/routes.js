@@ -19,6 +19,8 @@ import { idValido } from "./utils/validacoes.js";
 import notificacoesControllers from "./controllers/notificacoesControllers.js";
 import autorizarCron from "./middleware/autorizarCron.js";
 import { limiteLeituraQR } from "./middleware/limiteLeituraQR.js";
+import equipeControllers from "./controllers/equipeControllers.js";
+import autorizarUniversal from "./middleware/autorizarUniversal.js";
 
 
 const routes = express.Router();
@@ -54,6 +56,19 @@ const autorizarAdminOuAut = (req, res, next) =>
         : res.status(403).json({ error: 'Acesso restrito a administradores e autorizadores' });
 routes.get('/perfil', authorization, autorizarAdminOuAut, painelControllers.meuPerfil);
 routes.put('/perfil', authorization, autorizarAdminOuAut, painelControllers.atualizarMeuPerfil);
+// troca da própria senha (obrigatória no primeiro acesso com senha provisória)
+routes.put('/minha-senha', authorization, autorizarAdminOuAut, equipeControllers.trocarSenha);
+
+// Equipe da rede (só o admin universal): lista, cadastro direto com senha
+// provisória, desativar/reativar e convites para o cadastro pelo link
+routes.get('/equipe', authorization, autorizarUniversal, equipeControllers.listar);
+routes.post('/equipe', authorization, autorizarUniversal, equipeControllers.cadastrar);
+routes.patch('/equipe/:perfil/:id/ativo', authorization, autorizarUniversal, equipeControllers.alterarAtivo);
+// público: dados do convite para o formulário do link (perfil e unidade)
+routes.get('/convites/info', equipeControllers.infoConvite);
+routes.get('/convites', authorization, autorizarUniversal, equipeControllers.listarConvites);
+routes.post('/convites', authorization, autorizarUniversal, equipeControllers.criarConvite);
+routes.delete('/convites/:id', authorization, autorizarUniversal, equipeControllers.cancelarConvite);
 
 // Home do admin (fila de trabalho)
 routes.get('/painel/admin', authorization, autorizarAdmin, painelControllers.painelAdmin);
@@ -79,10 +94,12 @@ routes.get('/postos' , postocoleta.listar)
 
 routes.get('/administradorall', authorization, autorizarAdmin, administradorControllers.administradorall);
 
+// cadastro pelo link do convite (o controller exige um convite válido)
 routes.post('/administrador', administradorControllers.createadministrador);
 
 //rotas autorizador
 routes.get('/autorizadorall',authorization,autorizarAut, autorizadorControllers.autorizadorrall);
+// cadastro pelo link do convite (o controller exige um convite válido)
 routes.post('/autorizador',  autorizadorControllers.createautorizador);
 routes.get('/prescricao/aprovadas',authorization,autorizarAut, autorizadorControllers.buscarPrescricoesAprovadas);
 

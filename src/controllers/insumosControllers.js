@@ -1,5 +1,6 @@
 import knex from "../database/index.js";
 import { avisarEstoque } from "../notificacoes/estoque.js";
+import { comReserva, reservados } from "../utils/estoque.js";
 
 export default {
   async buscar(req, res) {
@@ -29,7 +30,8 @@ export default {
         .select("ins_id", "ins_nome", "ins_quantidade", "ins_marca", "pos_id")
         .limit(10);
 
-      return res.status(200).send(insumos);
+      // com o reservado em coletas agendadas e o que sobra livre
+      return res.status(200).send(await comReserva(insumos));
     } catch (error) {
       return res
         .status(500)
@@ -39,7 +41,6 @@ export default {
 
   async listar(req, res) {
     try {
-      const {  } = req.query;
       const admin = req.session;
       const universal = Boolean(admin.tp_universal);
 
@@ -50,6 +51,7 @@ export default {
           "insumo.ins_nome",
           "insumo.ins_quantidade",
           "insumo.ins_marca",
+          "insumo.pos_id",
           "postosdesaude.pos_nome as posto_nome",
         );
 
@@ -57,12 +59,15 @@ export default {
         consulta = req.session.posto_id
           ? consulta.where("insumo.pos_id", req.session.posto_id)
           : consulta.whereNull("insumo.pos_id");
+      } else if (/^\d+$/.test(String(req.query.pos_id ?? ""))) {
+        // admin universal escolhendo a unidade (ex.: no agendamento)
+        consulta = consulta.where("insumo.pos_id", Number(req.query.pos_id));
       }
 
       const insumos = await consulta
       .orderBy('insumo.ins_nome')
 
-      return res.status(200).send(insumos);
+      return res.status(200).send(await comReserva(insumos));
     } catch (error) {
       return res
         .status(500)
@@ -113,10 +118,19 @@ export default {
 
     await avisarEstoque([{ ins_id: insumo.ins_id, antes: atual, depois: novaQuantidade }]);
 
+    // saída que deixa o estoque abaixo do que já está reservado: registra,
+    // mas avisa que coletas agendadas vão ficar sem insumo
+    const reservado = (await reservados([insumo.ins_id])).get(Number(insumo.ins_id)) ?? 0;
+
     return res.status(200).send({
       message: tipo === 'entrada' ? 'Entrada registrada com sucesso' : 'Saída registrada com sucesso',
       ins_id: insumo.ins_id,
       ins_quantidade: novaQuantidade,
+      ins_reservado: reservado,
+      ins_disponivel: Math.max(0, novaQuantidade - reservado),
+      ...(novaQuantidade < reservado
+        ? { aviso: `Atenção: ${reservado} unidade(s) estão reservadas para coletas agendadas e agora há só ${novaQuantidade} em estoque.` }
+        : {}),
     });
 
   } catch (error) {

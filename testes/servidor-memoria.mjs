@@ -27,6 +27,7 @@ db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], re
 // REGEXP_REPLACE(texto, padrão, troca, 'g') usado na matrícula
 db.public.registerFunction({ name: 'regexp_replace', args: ['text', 'text', 'text', 'text'], returns: 'text', implementation: (a, b, c, f) => a == null ? null : a.replace(new RegExp(b, f), c) });
 // gen_random_uuid() é nativo no Postgres 13+ (Neon)
+db.public.registerFunction({ name: 'trim', args: ['text'], returns: 'text', implementation: (a) => (a == null ? null : a.trim()) });
 db.public.registerFunction({ name: 'gen_random_uuid', returns: 'uuid', implementation: () => randomUUID(), impure: true });
 db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
@@ -62,6 +63,11 @@ db.public.none(
 const migracao4 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-24_qrcode_agendamento.sql'), 'utf8');
 db.public.none(
   migracao4.slice(migracao4.indexOf('-- @pgmem-inicio'), migracao4.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+// migração de 25/10 (equipe por convite e estoque reservado): só o trecho marcado
+const migracao5 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-25_equipe_e_estoque.sql'), 'utf8');
+db.public.none(
+  migracao5.slice(migracao5.indexOf('-- @pgmem-inicio'), migracao5.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
 
 const knex = db.adapters.createKnex();

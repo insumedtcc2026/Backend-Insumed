@@ -4,7 +4,7 @@
 import { test, mock, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -24,6 +24,8 @@ const db = newDb();
 db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], returns: 'text', implementation: (a, b, c) => a == null ? null : a.split(b).join(c) });
 // REGEXP_REPLACE(texto, padrão, troca, 'g') usado na matrícula
 db.public.registerFunction({ name: 'regexp_replace', args: ['text', 'text', 'text', 'text'], returns: 'text', implementation: (a, b, c, f) => a == null ? null : a.replace(new RegExp(b, f), c) });
+// TRIM(texto) usado na busca de insumo pelo nome
+db.public.registerFunction({ name: 'trim', args: ['text'], returns: 'text', implementation: (a) => a == null ? null : a.trim() });
 // gen_random_uuid() é nativo no Postgres 13+ (Neon)
 db.public.registerFunction({ name: 'gen_random_uuid', returns: 'uuid', implementation: () => randomUUID(), impure: true });
 db.public.none(`
@@ -70,6 +72,12 @@ db.public.none(
   migracao4.slice(migracao4.indexOf('-- @pgmem-inicio'), migracao4.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
 
+// migração de 25/10 (equipe por convite e estoque reservado): só o trecho marcado
+const migracao5 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-25_equipe_e_estoque.sql'), 'utf8');
+db.public.none(
+  migracao5.slice(migracao5.indexOf('-- @pgmem-inicio'), migracao5.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
 
@@ -81,6 +89,15 @@ const amanha = new Date(Date.parse(hoje) + 86400000).toISOString().slice(0, 10);
 const ontem = new Date(Date.parse(hoje) - 86400000).toISOString().slice(0, 10);
 const png = (txt) => Buffer.from('\x89PNG' + txt).toString('base64');
 const auth = (t) => ({ Authorization: `Bearer ${t}` });
+const hashTeste = (codigo) => createHash('sha256').update(codigo).digest('hex');
+// convite válido criado direto no banco (o fluxo pela API tem testes próprios)
+const criarConvite = async (perfil, pos_id = null) => {
+  const codigo = randomUUID();
+  await knex('convite_equipe').insert({
+    cnv_perfil: perfil, pos_id, cnv_codigo_hash: hashTeste(codigo), cnv_expira_em: new Date(Date.now() + 86400000),
+  });
+  return codigo;
+};
 
 before(async () => {
   const senha = await bcrypt.hash('Senha@123', 4);
@@ -275,7 +292,10 @@ test('B9 autorizador autoriza e não pode decidir de novo', async () => {
 // ------------------------------------------------------------------
 const novoAg = (extra = {}) => ({
   paciente: { pac_id: ids.pacA }, posto: { pos_id: ids.posto1 }, sol_data_de_coleta: amanha,
-  itens: [{ ins_nome: 'Fralda G', quantidade: 2 }], sol_origem_id: ids.sol1, ...extra,
+  itens: [{ ins_nome: 'Fralda G', quantidade: 2 }], sol_origem_id: ids.sol1,
+  // o estoque de teste é pequeno de propósito (D1); o aviso de estoque
+  // reservado tem os próprios testes (S1)
+  confirmar_sem_estoque: true, ...extra,
 });
 
 test('C1 validações do agendamento', async () => {
@@ -497,9 +517,31 @@ test('F3 cadastro público de paciente continua funcionando e validando', async 
   assert.equal(ruim.status, 400);
 });
 
-test('F4 cadastro de autorizador e administrador segue público (decisão 4B)', async () => {
-  const r = await request(app).post('/autorizador').send({ nome: 'Eva Rocha', email: 'eva@teste.com', telefone: '24991234567', cpf: '390.533.447-05', senha: 'Senha@123', confirmacao_senha: 'Senha@123' });
+test('F4 cadastro de autorizador e administrador só com convite válido', async () => {
+  const dados = { nome: 'Eva Rocha', email: 'eva@teste.com', telefone: '24991234567', cpf: '390.533.447-05', senha: 'Senha@123', confirmacao_senha: 'Senha@123' };
+  const semConvite = await request(app).post('/autorizador').send(dados);
+  assert.equal(semConvite.status, 403);
+  assert.match(semConvite.body.erros[0], /convite/);
+  assert.equal(await knex('autorizador').where('aut_email', 'eva@teste.com').first(), undefined, 'nada criado');
+
+  const inventado = await request(app).post('/autorizador').send({ ...dados, convite: 'codigo-inventado' });
+  assert.equal(inventado.status, 403);
+
+  // convite de administrador não serve para autorizador
+  const deAdmin = await criarConvite('ADMIN', ids.posto1);
+  assert.equal((await request(app).post('/autorizador').send({ ...dados, convite: deAdmin })).status, 403);
+
+  const codigo = await criarConvite('AUTORIZADOR');
+  const r = await request(app).post('/autorizador').send({ ...dados, convite: codigo });
   assert.equal(r.status, 201, JSON.stringify(r.body));
+  const usado = await knex('convite_equipe').where('cnv_codigo_hash', hashTeste(codigo)).first();
+  assert.ok(usado.cnv_usado_em, 'convite marcado como usado');
+  assert.equal(usado.cnv_usado_email, 'eva@teste.com');
+
+  // uso único
+  const repetido = await request(app).post('/autorizador').send({ ...dados, email: 'eva2@teste.com', cpf: '300.264.746-20', convite: codigo });
+  assert.equal(repetido.status, 403);
+  assert.match(repetido.body.erros[0], /já foi usado/);
 });
 
 test('F5 agendamento sem vínculo (fluxo antigo, sem sol_origem_id) continua permitido', async () => {
@@ -813,11 +855,11 @@ test('L2 cadastro de administrador: matrícula validada, normalizada e única; s
   const base = { nome: 'Rui Prado', telefone: '24991234567', senha: 'Senha@123', confirmacao_senha: 'Senha@123', posto_id: ids.posto1 };
   const invalidas = ['', 'ab', 'A#1', 'ABCD', '12', 'x1'.repeat(11)];
   for (const matricula of invalidas) {
-    const r = await request(app).post('/administrador').send({ ...base, matricula, email: 'rui@teste.com', cpf: '879.376.059-01' });
+    const r = await request(app).post('/administrador').send({ ...base, matricula, email: 'rui@teste.com', cpf: '879.376.059-01', convite: await criarConvite('ADMIN', ids.posto1) });
     assert.equal(r.status, 400, `matrícula ${JSON.stringify(matricula)}`);
   }
 
-  const ok = await request(app).post('/administrador').send({ ...base, matricula: ' sms-1234 ', email: 'rui@teste.com', cpf: '879.376.059-01', tp_universal: true });
+  const ok = await request(app).post('/administrador').send({ ...base, matricula: ' sms-1234 ', email: 'rui@teste.com', cpf: '879.376.059-01', tp_universal: true, convite: await criarConvite('ADMIN', ids.posto1) });
   assert.equal(ok.status, 201, JSON.stringify(ok.body));
   const rui = await knex('administrador').where('adm_email', 'rui@teste.com').first();
   assert.equal(rui.adm_matricula, 'SMS-1234');
@@ -825,21 +867,24 @@ test('L2 cadastro de administrador: matrícula validada, normalizada e única; s
 
   // mesma matrícula escrita de outro jeito (minúsculas, espaço, sem separador)
   for (const matricula of ['sms1234', 'SMS 1234', 'sms/1234']) {
-    const dup = await request(app).post('/administrador').send({ ...base, matricula, email: 'rui2@teste.com', cpf: '300.264.746-20' });
+    const dup = await request(app).post('/administrador').send({ ...base, matricula, email: 'rui2@teste.com', cpf: '300.264.746-20', convite: await criarConvite('ADMIN', ids.posto1) });
     assert.equal(dup.status, 409, matricula);
     assert.ok(dup.body.erros.includes('Matrícula já cadastrada.'));
   }
 
-  const postoRuim = await request(app).post('/administrador').send({ ...base, posto_id: 9999, matricula: 'B-77', email: 'rui3@teste.com', cpf: '300.264.746-20' });
+  // a unidade vem do convite; no cadastro direto (admin universal) ela é validada
+  const postoRuim = await request(app).post('/equipe').set(auth(tk.admMesmoId)).send({ ...base, perfil: 'ADMIN', posto_id: 9999, matricula: 'B-77', email: 'rui3@teste.com', cpf: '300.264.746-20' });
   assert.equal(postoRuim.status, 400);
-  const postoTexto = await request(app).post('/administrador').send({ ...base, posto_id: 'abc', matricula: 'B-77', email: 'rui3@teste.com', cpf: '300.264.746-20' });
+  const postoTexto = await request(app).post('/equipe').set(auth(tk.admMesmoId)).send({ ...base, perfil: 'ADMIN', posto_id: 'abc', matricula: 'B-77', email: 'rui3@teste.com', cpf: '300.264.746-20' });
   assert.equal(postoTexto.status, 400);
+  // convite da unidade 1: o posto_id do formulário é ignorado
+  assert.equal(rui.pos_id, ids.posto1);
 
-  const emailPaciente = await request(app).post('/administrador').send({ ...base, matricula: 'B-78', email: 'ana@teste.com', cpf: '300.264.746-20' });
+  const emailPaciente = await request(app).post('/administrador').send({ ...base, matricula: 'B-78', email: 'ana@teste.com', cpf: '300.264.746-20', convite: await criarConvite('ADMIN', ids.posto1) });
   assert.equal(emailPaciente.status, 409);
   assert.ok(emailPaciente.body.erros.includes('E-mail já cadastrado.'));
 
-  const autEmailUsado = await request(app).post('/autorizador').send({ nome: 'Ivo Reis', email: 'rui@teste.com', telefone: '24991234567', cpf: '300.264.746-20', senha: 'Senha@123', confirmacao_senha: 'Senha@123' });
+  const autEmailUsado = await request(app).post('/autorizador').send({ nome: 'Ivo Reis', email: 'rui@teste.com', telefone: '24991234567', cpf: '300.264.746-20', senha: 'Senha@123', confirmacao_senha: 'Senha@123', convite: await criarConvite('AUTORIZADOR') });
   assert.equal(autEmailUsado.status, 409);
 });
 
@@ -1062,7 +1107,7 @@ test('N1 fluxo completo: cada etapa avisa só quem deve, sem duplicar', async ()
   assert.equal((await notifs('ADMIN', adm1, 'pronta_para_agendar').where('sol_id', sol)).length, 1);
 
   // agendar: coleta não pode ser depois do vencimento
-  const base = { paciente: { pac_id: ids.pacB }, posto: { pos_id: ids.posto1 }, itens: [{ ins_nome: 'Fralda G', quantidade: 1 }], sol_origem_id: sol };
+  const base = { paciente: { pac_id: ids.pacB }, posto: { pos_id: ids.posto1 }, itens: [{ ins_nome: 'Fralda G', quantidade: 1 }], sol_origem_id: sol, confirmar_sem_estoque: true };
   const depois = await request(app).post('/agendamentos').set(auth(tk.adm)).send({ ...base, sol_data_de_coleta: somarDiasTeste(daqui5, 1) });
   assert.equal(depois.status, 400);
   assert.match(depois.body.message, /vencimento/);
@@ -1302,4 +1347,191 @@ test('Q3 tela de atendimento: dados mínimos, posto conferido, concluir pelo flu
   const depois = await request(app).get(`/agendamentos/${ids.agQR}/atendimento`).set(auth(tk.adm));
   assert.equal(depois.body.status, 'concluido');
   assert.equal(depois.body.insumos[0].estoque, 8);
+});
+
+// ------------------------------------------------------------------
+// Etapa S — Equipe por convite, login por CPF e estoque reservado (25/10)
+// ------------------------------------------------------------------
+test('S1 estoque reservado: insumo da própria unidade, aviso ao agendar além do disponível', async () => {
+  const [gaze] = await knex('insumo').insert({ ins_nome: 'Gaze S', ins_quantidade: 5, pos_id: ids.posto1 }).returning('ins_id');
+  const [gazeNorte] = await knex('insumo').insert({ ins_nome: 'Gaze S', ins_quantidade: 50, pos_id: ids.posto2 }).returning('ins_id');
+  const agendar = (itens, extra = {}) => request(app).post('/agendamentos').set(auth(tk.adm)).send({
+    paciente: { pac_id: ids.pacB }, posto: { pos_id: ids.posto1 }, sol_data_de_coleta: amanha, itens, ...extra,
+  });
+
+  const a1 = await agendar([{ ins_id: gaze.ins_id, quantidade: 3 }]);
+  assert.equal(a1.status, 201, JSON.stringify(a1.body));
+
+  const lista = await request(app).get('/insumos/listar').set(auth(tk.adm));
+  const item = lista.body.find((i) => i.ins_id === gaze.ins_id);
+  assert.equal(item.ins_quantidade, 5, 'a baixa só acontece na conclusão');
+  assert.equal(item.ins_reservado, 3);
+  assert.equal(item.ins_disponivel, 2);
+
+  // além do disponível: avisa e não cria nada
+  const antes = await knex('solicitacao').count({ n: '*' }).first();
+  const a2 = await agendar([{ ins_id: gaze.ins_id, quantidade: 3 }]);
+  assert.equal(a2.status, 409);
+  assert.equal(a2.body.codigo, 'ESTOQUE_INSUFICIENTE');
+  assert.deepEqual(a2.body.itens.map((i) => [i.ins_nome, i.pedido, i.disponivel]), [['Gaze S', 3, 2]]);
+  assert.equal((await knex('solicitacao').count({ n: '*' }).first()).n, antes.n);
+
+  // confirmando, agenda mesmo assim
+  const a3 = await agendar([{ ins_id: gaze.ins_id, quantidade: 3 }], { confirmar_sem_estoque: true });
+  assert.equal(a3.status, 201, JSON.stringify(a3.body));
+
+  // insumo de outra unidade e nome fora do estoque: recusados, nada é criado
+  const outro = await agendar([{ ins_id: gazeNorte.ins_id, quantidade: 1 }]);
+  assert.equal(outro.status, 400);
+  assert.match(outro.body.message, /não está cadastrado no estoque de Posto Centro/);
+  const insumosAntes = (await knex('insumo').count({ n: '*' }).first()).n;
+  const inventado = await agendar([{ ins_nome: 'Produto que não existe', quantidade: 1 }]);
+  assert.equal(inventado.status, 400);
+  assert.equal((await knex('insumo').count({ n: '*' }).first()).n, insumosAntes, 'nenhum insumo novo');
+
+  // pelo nome (clientes antigos) só acha o da própria unidade; linhas repetidas somam
+  const porNome = await agendar([{ ins_nome: 'gaze s', quantidade: 1 }, { ins_id: gaze.ins_id, quantidade: 1 }], { confirmar_sem_estoque: true });
+  assert.equal(porNome.status, 201, JSON.stringify(porNome.body));
+  const itens = await knex('coleta').where('sol_id', porNome.body.sol_id);
+  assert.deepEqual(itens.map((i) => [i.ins_id, i.quantidade]), [[gaze.ins_id, 2]]);
+
+  // cancelar libera a reserva
+  await request(app).patch(`/agendamentos/${a3.body.sol_id}/cancelar`).set(auth(tk.adm)).send({ motivo: 'Paciente pediu' }).expect(200);
+  const depois = (await request(app).get('/insumos/listar').set(auth(tk.adm))).body.find((i) => i.ins_id === gaze.ins_id);
+  assert.equal(depois.ins_reservado, 5);
+
+  // saída abaixo do reservado: registra e avisa
+  const saida = await request(app).patch(`/insumos/${gaze.ins_id}`).set(auth(tk.adm)).send({ tipo: 'saida', quantidade: 1 });
+  assert.equal(saida.status, 200);
+  assert.match(saida.body.aviso, /reservadas/);
+});
+
+test('S2 login por CPF ou e-mail; mesma pessoa em dois perfis escolhe o perfil', async () => {
+  const porCpf = await request(app).post('/login').send({ login: '529.982.247-25', senha: 'Senha@123' });
+  assert.equal(porCpf.status, 200, JSON.stringify(porCpf.body));
+  assert.equal(porCpf.body.usuario.tipo, 'PACIENTE');
+  assert.equal(jwt.decode(porCpf.body.token).id, ids.pacA);
+
+  const semPontos = await request(app).post('/login').send({ login: '52998224725', senha: 'Senha@123' });
+  assert.equal(semPontos.status, 200);
+
+  // campo antigo "email" continua funcionando, com e-mail ou CPF
+  assert.equal((await request(app).post('/login').send({ email: 'ana@teste.com', senha: 'Senha@123' })).status, 200);
+  assert.equal((await request(app).post('/login').send({ email: '52998224725', senha: 'Senha@123' })).status, 200);
+
+  assert.equal((await request(app).post('/login').send({ login: '123.456.789-00', senha: 'Senha@123' })).status, 400);
+  const errada = await request(app).post('/login').send({ login: '529.982.247-25', senha: 'Errada@123' });
+  assert.equal(errada.status, 401);
+  assert.match(errada.body.msg, /CPF ou senha/);
+
+  // Ana também trabalha na unidade (mesmo CPF e senha, outro e-mail)
+  await knex('administrador').insert({
+    adm_nome: 'Ana Souza', adm_email: 'ana.unidade@teste.com', adm_senha: await bcrypt.hash('Senha@123', 4),
+    adm_cpf: '52998224725', pos_id: ids.posto1, tp_universal: false,
+  });
+  const ambos = await request(app).post('/login').send({ login: '529.982.247-25', senha: 'Senha@123' });
+  assert.equal(ambos.status, 200);
+  assert.equal(ambos.body.escolher_perfil, true);
+  assert.equal(ambos.body.token, undefined, 'sem token até escolher');
+  assert.deepEqual(ambos.body.perfis.map((p) => p.tipo).sort(), ['ADMIN', 'PACIENTE']);
+
+  const comoAdmin = await request(app).post('/login').send({ login: '529.982.247-25', senha: 'Senha@123', perfil: 'ADMIN' });
+  assert.equal(comoAdmin.status, 200);
+  assert.equal(comoAdmin.body.usuario.tipo, 'ADMIN');
+  assert.equal(jwt.decode(comoAdmin.body.token).posto_id, ids.posto1);
+});
+
+test('S3 convites pela API: só o admin universal, uso único, cancelamento e validade', async () => {
+  const universal = tk.admMesmoId;
+  assert.equal((await request(app).post('/convites').set(auth(tk.adm)).send({ perfil: 'AUTORIZADOR' })).status, 403);
+  assert.equal((await request(app).get('/equipe').set(auth(tk.adm))).status, 403);
+  assert.equal((await request(app).post('/convites').set(auth(universal)).send({ perfil: 'ADMIN' })).status, 400, 'admin precisa de unidade');
+  assert.equal((await request(app).post('/convites').set(auth(universal)).send({ perfil: 'GERENTE' })).status, 400);
+
+  const c = await request(app).post('/convites').set(auth(universal)).send({ perfil: 'ADMIN', posto_id: ids.posto2 });
+  assert.equal(c.status, 201, JSON.stringify(c.body));
+  assert.equal(c.body.posto.pos_nome, 'Posto Norte');
+  const salvo = await knex('convite_equipe').where('cnv_id', c.body.cnv_id).first();
+  assert.notEqual(salvo.cnv_codigo_hash, c.body.codigo, 'no banco fica só o hash');
+
+  const lista = await request(app).get('/convites').set(auth(universal));
+  assert.equal(lista.body.find((x) => x.cnv_id === c.body.cnv_id).situacao, 'pendente');
+
+  const dados = { matricula: 'N-501', nome: 'Davi Neves', email: 'davi@teste.com', telefone: '24991234567', cpf: '300.264.746-20', senha: 'Senha@123', confirmacao_senha: 'Senha@123', posto_id: ids.posto1 };
+  const cad = await request(app).post('/administrador').send({ ...dados, convite: c.body.codigo });
+  assert.equal(cad.status, 201, JSON.stringify(cad.body));
+  assert.equal((await knex('administrador').where('adm_email', 'davi@teste.com').first()).pos_id, ids.posto2, 'unidade do convite');
+  assert.equal((await request(app).delete(`/convites/${c.body.cnv_id}`).set(auth(universal))).status, 409, 'usado não cancela');
+
+  const c2 = await request(app).post('/convites').set(auth(universal)).send({ perfil: 'AUTORIZADOR' });
+  assert.equal((await request(app).delete(`/convites/${c2.body.cnv_id}`).set(auth(universal))).status, 200);
+  const cancelado = await request(app).post('/autorizador').send({ ...dados, email: 'x1@teste.com', convite: c2.body.codigo });
+  assert.equal(cancelado.status, 403);
+  assert.match(cancelado.body.erros[0], /cancelado/);
+
+  const vencido = await criarConvite('AUTORIZADOR');
+  await knex('convite_equipe').where('cnv_codigo_hash', hashTeste(vencido)).update({ cnv_expira_em: new Date(Date.now() - 1000) });
+  const r = await request(app).post('/autorizador').send({ ...dados, email: 'x2@teste.com', convite: vencido });
+  assert.equal(r.status, 403);
+  assert.match(r.body.erros[0], /expirou/);
+});
+
+test('S4 cadastro direto com senha provisória, troca no primeiro acesso e desativação', async () => {
+  const universal = tk.admMesmoId;
+  const cad = await request(app).post('/equipe').set(auth(universal)).send({
+    perfil: 'AUTORIZADOR', nome: 'Lia Moraes', email: 'lia@teste.com', telefone: '24991234567', cpf: '879.376.059-01',
+  });
+  assert.equal(cad.status, 201, JSON.stringify(cad.body));
+  const provisoria = cad.body.senha_provisoria;
+  assert.ok(provisoria && provisoria.length >= 10);
+
+  const login = await request(app).post('/login').send({ login: 'lia@teste.com', senha: provisoria });
+  assert.equal(login.status, 200);
+  assert.equal(login.body.trocar_senha, true);
+  const tokenLia = login.body.token;
+
+  const errada = await request(app).put('/minha-senha').set(auth(tokenLia)).send({ senha_atual: 'Errada@1', nova_senha: 'NovaSenha@1', confirmacao_senha: 'NovaSenha@1' });
+  assert.equal(errada.status, 400);
+  const fraca = await request(app).put('/minha-senha').set(auth(tokenLia)).send({ senha_atual: provisoria, nova_senha: '123', confirmacao_senha: '123' });
+  assert.equal(fraca.status, 400);
+  const ok = await request(app).put('/minha-senha').set(auth(tokenLia)).send({ senha_atual: provisoria, nova_senha: 'NovaSenha@1', confirmacao_senha: 'NovaSenha@1' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const login2 = await request(app).post('/login').send({ login: 'lia@teste.com', senha: 'NovaSenha@1' });
+  assert.equal(login2.status, 200);
+  assert.equal(login2.body.trocar_senha, undefined);
+
+  const equipe = await request(app).get('/equipe').set(auth(universal));
+  const lia = equipe.body.find((p) => p.email === 'lia@teste.com');
+  assert.equal(lia.perfil, 'AUTORIZADOR');
+  assert.equal(lia.ativo, true);
+  assert.equal(equipe.body.some((p) => 'adm_senha' in p || 'senha' in p), false);
+
+  // desativar: o login e o token que já existia param na hora
+  const des = await request(app).patch(`/equipe/AUTORIZADOR/${lia.id}/ativo`).set(auth(universal)).send({ ativo: false });
+  assert.equal(des.status, 200);
+  assert.equal((await request(app).post('/login').send({ login: 'lia@teste.com', senha: 'NovaSenha@1' })).status, 403);
+  const negado = await request(app).get('/painel/autorizador').set(auth(login2.body.token));
+  assert.equal(negado.status, 401);
+  assert.match(negado.body.error, /desativada/);
+
+  await request(app).patch(`/equipe/AUTORIZADOR/${lia.id}/ativo`).set(auth(universal)).send({ ativo: true }).expect(200);
+  assert.equal((await request(app).get('/painel/autorizador').set(auth(login2.body.token))).status, 200);
+
+  // ninguém desativa a si mesmo; valor precisa ser booleano
+  assert.equal((await request(app).patch('/equipe/ADMIN/1/ativo').set(auth(universal)).send({ ativo: false })).status, 400);
+  assert.equal((await request(app).patch(`/equipe/AUTORIZADOR/${lia.id}/ativo`).set(auth(universal)).send({ ativo: 'nao' })).status, 400);
+  assert.equal((await request(app).patch(`/equipe/AUTORIZADOR/${lia.id}/ativo`).set(auth(tk.adm)).send({ ativo: false })).status, 403);
+});
+
+test('S5 informações públicas do convite para o formulário do link', async () => {
+  const codigo = await criarConvite('ADMIN', ids.posto2);
+  const info = await request(app).get('/convites/info').query({ codigo });
+  assert.equal(info.status, 200);
+  assert.equal(info.body.perfil, 'ADMIN');
+  assert.equal(info.body.posto.pos_nome, 'Posto Norte');
+  assert.equal((await request(app).get('/convites/info').query({ codigo: 'nao-existe' })).status, 404);
+  await knex('convite_equipe').where('cnv_codigo_hash', hashTeste(codigo)).update({ cnv_cancelado_em: new Date() });
+  const cancelado = await request(app).get('/convites/info').query({ codigo });
+  assert.equal(cancelado.status, 410);
+  assert.equal(cancelado.body.situacao, 'cancelado');
 });

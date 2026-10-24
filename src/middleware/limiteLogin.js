@@ -34,8 +34,10 @@ setInterval(() => {
 
 const chaves = (req) => {
   const ip = req.ip || req.socket?.remoteAddress || "desconhecido";
-  const email = String(req.body?.email ?? "").trim().toLowerCase();
-  return { conta: `conta:${ip}:${email}`, ip: `ip:${ip}` };
+  // e-mail ou CPF (o mesmo CPF com ou sem pontuação conta como uma conta só)
+  const informado = String(req.body?.login ?? req.body?.email ?? "").trim().toLowerCase();
+  const conta = informado.includes("@") ? informado : informado.replace(/\D/g, "");
+  return { conta: `conta:${ip}:${conta}`, ip: `ip:${ip}` };
 };
 
 export function limiteLogin(req, res, next) {
