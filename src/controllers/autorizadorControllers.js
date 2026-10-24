@@ -3,6 +3,7 @@ import {
   validarMotivo, mensagemErroBanco, validarDataISO,
 } from '../utils/validacoes.js';
 import { cadastrarComConvite } from '../utils/equipe.js';
+import { comItens } from '../utils/itensPrescricao.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
 import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
 import { COLUNA_VERSOES, comVersaoAnterior, numerarVersoes, versoesJoin } from '../utils/versoes.js';
@@ -75,6 +76,7 @@ export default {
             "sol.sol_id", "sol.pac_id", "sol.pos_id", "sol.ins_id", "sol.sol_status",
             "sol.sol_data_solicitacao", "sol.sol_data_vencimento", "sol.sol_observacao",
             "sol.sol_prescricao_tipo", "sol.sol_insumo_quant", "sol.sol_observacao_equipe",
+            "sol.sol_periodicidade_dias",
             "pac.pac_nome", "pac.pac_cpf", "pac.pac_avatar",
             "ins.ins_nome", "pos.pos_nome",
             // > 0 = o paciente reenviou uma versão corrigida antes da revisão
@@ -85,10 +87,10 @@ export default {
 
         if (req.query.page !== undefined) {
             const pagina = await paginar(query, montar, req.query);
-            return res.status(200).json({ ...pagina, itens: numerar(pagina.itens) });
+            return res.status(200).json({ ...pagina, itens: await comItens(numerar(pagina.itens)) });
         }
 
-        return res.status(200).json(numerar(await query.modify(montar)));
+        return res.status(200).json(await comItens(numerar(await query.modify(montar))));
 
     } catch (error) {
         console.error("ERRO COMPLETO AO BUSCAR PRESCRIÇÕES:", error);
@@ -136,7 +138,7 @@ export default {
         comNovaVersao,
         autorizadas30,
         naoAutorizadas30,
-        fila: numerarVersoes(fila),
+        fila: await comItens(numerarVersoes(fila)),
         recentes: recentes.map((r) => ({ sol_id: r.sol_id, acao: r.his_acao, quando: r.his_criado_em })),
       });
     } catch (error) {
@@ -204,6 +206,8 @@ if (!/^\d+$/.test(id)) {
 
           // QUANTIDADE
           "sol.sol_insumo_quant",
+          // uso contínuo: uma retirada a cada N dias
+          "sol.sol_periodicidade_dias",
 
           // PACIENTE
           "pac.pac_nome",
@@ -246,7 +250,7 @@ if (!/^\d+$/.test(id)) {
 
 
       return res.status(200).json(
-        solicitacao
+        await comItens(solicitacao)
       );
 
 

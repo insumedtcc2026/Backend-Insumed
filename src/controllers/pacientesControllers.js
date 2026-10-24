@@ -1,4 +1,5 @@
 import knex from '../database/index.js';
+import { comItens } from '../utils/itensPrescricao.js';
 import { STATUS_AGENDAMENTO } from '../utils/status.js';
 import bcrypt from 'bcrypt';
 import {
@@ -257,7 +258,7 @@ export default {
           'sol.sol_id', 'sol.sol_status', 'sol.sol_protocolo', 'sol.sol_data_solicitacao',
           'sol.sol_data_de_coleta', 'sol.sol_data_vencimento', 'sol.sol_insumo_quant',
           'sol.sol_motivo_nao_autorizado', 'sol.sol_motivo_reenvio', 'sol.sol_motivo_cancelamento',
-          'sol.sol_origem_id', 'sol.pos_id', 'pos.pos_nome', 'ins.ins_nome',
+          'sol.sol_origem_id', 'sol.sol_ciclo', 'sol.sol_periodicidade_dias', 'sol.pos_id', 'pos.pos_nome', 'ins.ins_nome',
           knex.raw('(sol.sol_prescricao IS NOT NULL) AS tem_prescricao'),
         )
         .orderBy('sol.sol_id', 'desc');
@@ -280,7 +281,7 @@ export default {
 
       return res.status(200).send({
         paciente: semSenha(paciente),
-        prescricoes: solicitacoes.filter((s) => !ehAgendamento(s)),
+        prescricoes: await comItens(solicitacoes.filter((s) => !ehAgendamento(s))),
         agendamentos,
       });
     } catch (error) {

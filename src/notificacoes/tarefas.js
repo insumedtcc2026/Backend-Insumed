@@ -9,7 +9,9 @@
 import knex from '../database/index.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
 import { dataHojeBrasil } from '../utils/validacoes.js';
-import { dataBR, isoData, somarDias } from '../utils/status.js';
+import { randomUUID } from 'node:crypto';
+import { dataBR, gerarProtocolo, isoData, somarDias } from '../utils/status.js';
+import { itensDasPrescricoes } from '../utils/itensPrescricao.js';
 import { adminsDoPosto, paciente } from './destinatarios.js';
 import { criarNotificacoes } from './gravar.js';
 import { carregarContexto, LINKS, primeiroNome } from './regras.js';
@@ -24,6 +26,7 @@ export const PRAZOS = {
   semAgendamentoDias: 3,     // autorizada sem coleta agendada
   vencendoDias: 7,           // autorizada perto do vencimento, sem retirada
   retencaoLidasDias: 180,    // notificações lidas somem depois disso
+  cicloDiasAntes: 7,         // uso contínuo: próximo ciclo criado 7 dias antes
 };
 
 // Início do dia (Brasília) de "hoje - n": eventos antes disso têm mais de n dias
@@ -218,6 +221,91 @@ export async function tratarVencidas(hoje = dataHojeBrasil()) {
 }
 
 // ---------------------------------------------------------------
+// Retirada recorrente (uso contínuo)
+// ---------------------------------------------------------------
+
+// Sábado e domingo passam para segunda
+function diaUtil(iso) {
+  const dia = new Date(`${iso}T12:00:00Z`).getUTCDay();
+  return dia === 6 ? somarDias(iso, 2) : dia === 0 ? somarDias(iso, 1) : iso;
+}
+
+/**
+ * Cria o agendamento do próximo ciclo das prescrições de uso contínuo,
+ * PRAZOS.cicloDiasAntes dias antes da data (última retirada + frequência),
+ * com os mesmos itens e na unidade da prescrição. O 1º ciclo é sempre
+ * agendado pela unidade.
+ * Não cria: depois do vencimento, com outro ciclo agendado, nem um ciclo que
+ * já existiu e foi cancelado ou faltou (esse a unidade reagenda). Rodar duas
+ * vezes no mesmo dia não duplica (o ciclo seguinte já existe; no banco, o
+ * índice ux_solicitacao_origem_ciclo).
+ */
+export async function criarProximosCiclos(hoje = dataHojeBrasil()) {
+  const prescricoes = await knex('solicitacao')
+    .where('sol_status', 'Autorizado')
+    .where('sol_periodicidade_dias', '>', 0)
+    .where((qb) => qb.whereNull('sol_data_vencimento').orWhere('sol_data_vencimento', '>=', hoje))
+    .select('sol_id', 'pac_id', 'pos_id', 'sol_periodicidade_dias', 'sol_data_vencimento');
+
+  let criados = 0;
+  for (const p of prescricoes) {
+    const ciclos = await knex('solicitacao')
+      .where('sol_origem_id', p.sol_id)
+      .select('sol_id', 'sol_status', 'sol_ciclo', 'sol_data_de_coleta');
+    if (ciclos.some((c) => c.sol_status === 'agendado')) continue;
+
+    const concluidos = ciclos.filter((c) => c.sol_status === 'concluido');
+    if (!concluidos.length) continue;
+    const ultimo = concluidos.reduce((a, b) => (Number(b.sol_ciclo) > Number(a.sol_ciclo) ? b : a));
+    const ciclo = Number(ultimo.sol_ciclo || 1) + 1;
+    if (ciclos.some((c) => Number(c.sol_ciclo) === ciclo)) continue;
+
+    const prevista = somarDias(isoData(ultimo.sol_data_de_coleta), Number(p.sol_periodicidade_dias));
+    if (somarDias(prevista, -PRAZOS.cicloDiasAntes) > hoje) continue;
+    // a tarefa pode ter ficado dias sem rodar: nunca no passado
+    const data = diaUtil(prevista > hoje ? prevista : somarDias(hoje, 1));
+    const vencimento = isoData(p.sol_data_vencimento);
+    if (vencimento && data > vencimento) continue;
+
+    const itens = (await itensDasPrescricoes([p.sol_id])).get(Number(p.sol_id)) ?? [];
+    if (!itens.length) continue;
+
+    try {
+      await knex.transaction(async (trx) => {
+        const [novo] = await trx('solicitacao')
+          .insert({
+            pac_id: p.pac_id,
+            pos_id: p.pos_id,
+            sol_data_de_coleta: data,
+            sol_status: 'agendado',
+            sol_insumo_quant: 0,
+            sol_origem_id: p.sol_id,
+            sol_ciclo: ciclo,
+            sol_codigo_qr: randomUUID(),
+          })
+          .returning('sol_id');
+        const sol_id = typeof novo === 'object' ? novo.sol_id : novo;
+        const protocolo = gerarProtocolo(sol_id);
+        await trx('solicitacao').where('sol_id', sol_id).update({ sol_protocolo: protocolo });
+        await trx('coleta').insert(itens.map((i) => ({ sol_id, ins_id: i.ins_id, quantidade: i.quantidade })));
+
+        const posto = await trx('postosdesaude').where('pos_id', p.pos_id).first('pos_nome');
+        const detalhe = `${protocolo} · coleta em ${dataBR(data)} · ${posto?.pos_nome ?? 'unidade'} · ${ciclo}ª retirada (uso contínuo)`;
+        await registrarHistorico(trx, null, { sol_id, acao: ACOES.AGENDADA, para: 'agendado', detalhe });
+        await registrarHistorico(trx, null, {
+          sol_id: p.sol_id, acao: ACOES.AGENDADA, de: 'Autorizado', para: 'Autorizado', detalhe,
+        });
+      });
+      criados++;
+    } catch (error) {
+      // outra execução criou o mesmo ciclo ao mesmo tempo
+      if (error?.code !== '23505') throw error;
+    }
+  }
+  return criados;
+}
+
+// ---------------------------------------------------------------
 // Pendências por tempo
 // ---------------------------------------------------------------
 
@@ -320,6 +408,7 @@ export async function tarefaDiaria(hoje = dataHojeBrasil()) {
   const resultado = { hoje };
   resultado.naoCompareceu = await marcarNaoCompareceu(hoje);
   resultado.vencidas = await tratarVencidas(hoje);
+  resultado.ciclos = await criarProximosCiclos(hoje);
   resultado.eventos = await processarEventos({ limite: 500, repetirFalhas: true });
   resultado.lembretes = await gerarLembretes(hoje);
   resultado.coletasSemBaixa = await avisarColetasAtrasadas(hoje);

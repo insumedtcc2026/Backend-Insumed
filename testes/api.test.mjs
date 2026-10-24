@@ -77,6 +77,11 @@ const migracao5 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10
 db.public.none(
   migracao5.slice(migracao5.indexOf('-- @pgmem-inicio'), migracao5.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
+// migração de 26/10 (etapa 2: itens da prescrição e retirada recorrente)
+const migracao6 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-26_itens_e_recorrencia.sql'), 'utf8');
+db.public.none(
+  migracao6.slice(migracao6.indexOf('-- @pgmem-inicio'), migracao6.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
 
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
@@ -223,9 +228,9 @@ test('B3 admin não pode gravar Autorizado/Aprovado (pular o autorizador)', asyn
 test('B4 validações da revisão: quantidade, insumo, vencimento', async () => {
   const base = { sol_status: 'Revisado', ins_id: ids.insumo, sol_insumo_quant: 2, sol_data_vencimento: amanha };
   const casos = [
-    [{ ...base, sol_insumo_quant: 0 }, 400, /Quantidade/],
-    [{ ...base, sol_insumo_quant: 1.5 }, 400, /Quantidade/],
-    [{ ...base, ins_id: undefined }, 400, /Insumo não informado/],
+    [{ ...base, sol_insumo_quant: 0 }, 400, /quantidade/i],
+    [{ ...base, sol_insumo_quant: 1.5 }, 400, /quantidade/i],
+    [{ ...base, ins_id: undefined }, 400, /pelo menos um insumo/],
     [{ ...base, ins_id: 999 }, 404, /Insumo não encontrado/],
     [{ ...base, sol_data_vencimento: undefined }, 400, /vencimento/],
     [{ ...base, sol_data_vencimento: '2026-02-30' }, 400, /vencimento inválida/],
@@ -1534,4 +1539,135 @@ test('S5 informações públicas do convite para o formulário do link', async (
   const cancelado = await request(app).get('/convites/info').query({ codigo });
   assert.equal(cancelado.status, 410);
   assert.equal(cancelado.body.situacao, 'cancelado');
+});
+
+// ------------------------------------------------------------------
+// Etapa 2 — Prescrição com vários insumos e retirada recorrente
+// ------------------------------------------------------------------
+
+// prescrição Pendente do paciente A no posto 1, criada direto no banco
+const novaPrescricao = async () => {
+  const [p] = await knex('solicitacao')
+    .insert({ pac_id: ids.pacA, pos_id: ids.posto1, sol_status: 'Pendente', sol_insumo_quant: 0, sol_prescricao: Buffer.from('x') })
+    .returning('sol_id');
+  return p.sol_id;
+};
+const somar = (iso, dias) => new Date(Date.parse(iso) + dias * 86400000).toISOString().slice(0, 10);
+
+test('R1 revisão com vários insumos: itens somados, colunas antigas com o 1º e leitura com a lista', async () => {
+  const [bolsa] = await knex('insumo').insert({ ins_nome: 'Bolsa de colostomia', ins_quantidade: 100, pos_id: ids.posto1 }).returning('ins_id');
+  const [placa] = await knex('insumo').insert({ ins_nome: 'Placa protetora', ins_quantidade: 100, pos_id: ids.posto1 }).returning('ins_id');
+  ids.bolsa = bolsa.ins_id; ids.placa = placa.ins_id;
+  const sol = await novaPrescricao();
+
+  const r = await request(app).patch(`/solicitacao/${sol}`).set(auth(tk.adm)).send({
+    sol_status: 'Revisado', sol_data_vencimento: somar(hoje, 90),
+    itens: [{ ins_id: ids.bolsa, quantidade: 20 }, { ins_id: ids.placa, quantidade: 4 }, { ins_id: ids.bolsa, quantidade: 10 }],
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+
+  const itens = await knex('solicitacao_item').where('sol_id', sol).orderBy('sit_id');
+  assert.deepEqual(itens.map((i) => [i.ins_id, i.sit_quantidade]), [[ids.bolsa, 30], [ids.placa, 4]]);
+  const linha = await knex('solicitacao').where('sol_id', sol).first();
+  assert.equal(linha.ins_id, ids.bolsa);
+  assert.equal(linha.sol_insumo_quant, 30);
+  assert.equal(linha.sol_periodicidade_dias, null);
+
+  const adm = await request(app).get(`/solicitacao/${sol}`).set(auth(tk.adm));
+  assert.equal(adm.body.itens.length, 2);
+  assert.equal(adm.body.insumos_resumo, '30x Bolsa de colostomia, 4x Placa protetora');
+  const aut = await request(app).get(`/autorizador/solicitacao/${sol}`).set(auth(tk.aut));
+  assert.equal(aut.body.itens.length, 2);
+  const minhas = await request(app).get('/minhas-prescricoes').set(auth(tk.pacA));
+  assert.equal(minhas.body.find((p) => p.sol_id === sol).itens.length, 2);
+});
+
+test('R2 revisão: insumo de outra unidade, lista vazia e frequência inválida são recusados', async () => {
+  const [norte] = await knex('insumo').insert({ ins_nome: 'Fita (Norte)', ins_quantidade: 5, pos_id: ids.posto2 }).returning('ins_id');
+  const sol = await novaPrescricao();
+  const base = { sol_status: 'Revisado', sol_data_vencimento: somar(hoje, 60) };
+  const casos = [
+    [{ ...base, itens: [{ ins_id: norte.ins_id, quantidade: 1 }] }, 400, /não é do estoque da unidade/],
+    [{ ...base, itens: [] }, 400, /pelo menos um insumo/],
+    [{ ...base, itens: [{ ins_id: ids.bolsa, quantidade: 0 }] }, 400, /quantidade/],
+    [{ ...base, itens: [{ ins_id: ids.bolsa, quantidade: 1 }], sol_periodicidade_dias: 3 }, 400, /frequência/],
+    [{ ...base, itens: [{ ins_id: ids.bolsa, quantidade: 1 }], sol_periodicidade_dias: 'mensal' }, 400, /frequência/],
+  ];
+  for (const [corpo, status, msg] of casos) {
+    const r = await request(app).patch(`/solicitacao/${sol}`).set(auth(tk.adm)).send(corpo);
+    assert.equal(r.status, status, JSON.stringify(corpo));
+    assert.match(r.body.error, msg);
+  }
+  assert.equal((await knex('solicitacao').where('sol_id', sol).first()).sol_status, 'Pendente');
+});
+
+test('R3 uso contínuo: cada retirada concluída libera o próximo ciclo; retirada única não', async () => {
+  const sol = await novaPrescricao();
+  await request(app).patch(`/solicitacao/${sol}`).set(auth(tk.adm)).send({
+    sol_status: 'Revisado', sol_data_vencimento: somar(hoje, 120), sol_periodicidade_dias: 30,
+    itens: [{ ins_id: ids.bolsa, quantidade: 2 }, { ins_id: ids.placa, quantidade: 1 }],
+  }).expect(200);
+  await request(app).patch(`/autorizador/solicitacao/${sol}`).set(auth(tk.aut)).send({ sol_status: 'Autorizado' }).expect(200);
+
+  const agendar = (extra = {}) => request(app).post('/agendamentos').set(auth(tk.adm)).send({
+    ...novoAg({ sol_origem_id: sol, itens: [{ ins_id: ids.bolsa, quantidade: 2 }, { ins_id: ids.placa, quantidade: 1 }] }), ...extra,
+  });
+  const c1 = await agendar();
+  assert.equal(c1.status, 201, JSON.stringify(c1.body));
+  assert.equal(c1.body.sol_ciclo, 1);
+  assert.equal((await agendar()).status, 409); // ciclo 1 ainda em aberto
+
+  await request(app).patch(`/agendamentos/${c1.body.sol_id}/concluir`).set(auth(tk.adm)).expect(200);
+  const c2 = await agendar({ sol_data_de_coleta: somar(hoje, 30) });
+  assert.equal(c2.status, 201, JSON.stringify(c2.body));
+  assert.equal(c2.body.sol_ciclo, 2);
+
+  // retirada única: depois de concluída, não agenda de novo
+  const unica = await novaPrescricao();
+  await request(app).patch(`/solicitacao/${unica}`).set(auth(tk.adm)).send({
+    sol_status: 'Revisado', sol_data_vencimento: somar(hoje, 60), itens: [{ ins_id: ids.bolsa, quantidade: 1 }],
+  }).expect(200);
+  await request(app).patch(`/autorizador/solicitacao/${unica}`).set(auth(tk.aut)).send({ sol_status: 'Autorizado' }).expect(200);
+  const u1 = await agendar({ sol_origem_id: unica, itens: [{ ins_id: ids.bolsa, quantidade: 1 }] });
+  assert.equal(u1.status, 201);
+  await request(app).patch(`/agendamentos/${u1.body.sol_id}/concluir`).set(auth(tk.adm)).expect(200);
+  assert.equal((await agendar({ sol_origem_id: unica, itens: [{ ins_id: ids.bolsa, quantidade: 1 }] })).status, 409);
+});
+
+test('R4 tarefa diária cria o próximo ciclo 7 dias antes, uma vez só, e para no vencimento', async () => {
+  const { criarProximosCiclos } = await import(pathToFileURL(path.join(BACKEND, 'src/notificacoes/tarefas.js')).href);
+  const sol = await novaPrescricao();
+  await request(app).patch(`/solicitacao/${sol}`).set(auth(tk.adm)).send({
+    sol_status: 'Revisado', sol_data_vencimento: somar(hoje, 50), sol_periodicidade_dias: 30,
+    itens: [{ ins_id: ids.bolsa, quantidade: 5 }, { ins_id: ids.placa, quantidade: 2 }],
+  }).expect(200);
+  await request(app).patch(`/autorizador/solicitacao/${sol}`).set(auth(tk.aut)).send({ sol_status: 'Autorizado' }).expect(200);
+  const c1 = await request(app).post('/agendamentos').set(auth(tk.adm))
+    .send(novoAg({ sol_origem_id: sol, itens: [{ ins_id: ids.bolsa, quantidade: 5 }] })).expect(201);
+  await request(app).patch(`/agendamentos/${c1.body.sol_id}/concluir`).set(auth(tk.adm)).expect(200);
+
+  // próxima = amanhã + 30. Antes dos 7 dias: nada
+  const proxima = somar(amanha, 30);
+  const ciclosDe = () => knex('solicitacao').where('sol_origem_id', sol).orderBy('sol_id');
+  await criarProximosCiclos(somar(proxima, -8));
+  assert.equal((await ciclosDe()).length, 1);
+
+  await criarProximosCiclos(somar(proxima, -7));
+  await criarProximosCiclos(somar(proxima, -7)); // rodar duas vezes não duplica
+  const ciclos = await ciclosDe();
+  assert.equal(ciclos.length, 2);
+  const c2 = ciclos[1];
+  assert.equal(c2.sol_status, 'agendado');
+  assert.equal(c2.sol_ciclo, 2);
+  assert.ok(c2.sol_protocolo);
+  const dia = new Date(`${String(c2.sol_data_de_coleta instanceof Date ? c2.sol_data_de_coleta.toISOString() : c2.sol_data_de_coleta).slice(0, 10)}T12:00:00Z`).getUTCDay();
+  assert.ok(dia >= 1 && dia <= 5, 'cai em dia útil');
+  // mesmos itens da prescrição (não só o que foi pedido no 1º agendamento)
+  const coleta = await knex('coleta').where('sol_id', c2.sol_id).orderBy('ins_id');
+  assert.deepEqual(coleta.map((c) => [c.ins_id, c.quantidade]), [[ids.bolsa, 5], [ids.placa, 2]]);
+
+  // o 3º ciclo cairia depois do vencimento (50 dias): não é criado
+  await request(app).patch(`/agendamentos/${c2.sol_id}/concluir`).set(auth(tk.adm)).expect(200);
+  await criarProximosCiclos(somar(proxima, 25));
+  assert.equal((await ciclosDe()).length, 2);
 });

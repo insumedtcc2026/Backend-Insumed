@@ -3,18 +3,13 @@ import knex from '../database/index.js';
 import { cpfParcial, dataHojeBrasil, idValido, lerCodigoQR, validarDataISO, validarMotivo } from '../utils/validacoes.js';
 import { registrarFalhaLeituraQR } from '../middleware/limiteLeituraQR.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
-import { dataBR, isoData, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_ATIVO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
+import { dataBR, gerarProtocolo, isoData, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_ATIVO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
 import { idDoAdmin } from '../utils/contas.js';
 import { notificar } from '../notificacoes/processador.js';
 import { avisarEstoque } from '../notificacoes/estoque.js';
 import { reservados } from '../utils/estoque.js';
 
 const TAMANHO_MAX_RECADO = 300;
-
-// Monta o protocolo de atendimento a partir do sol_id, ex: sol_id 42 -> "AG000042"
-function gerarProtocolo(sol_id) {
-    return `AG${String(sol_id).padStart(6, '0')}`;
-}
 
 // Agrupa as linhas "achatadas" do JOIN (uma linha por insumo) no formato
 // aninhado que o frontend espera (um objeto por agendamento, com um
@@ -32,6 +27,8 @@ function agruparPorAgendamento(resultado) {
                 sol_motivo_cancelamento: linha.sol_motivo_cancelamento ?? null,
                 sol_data_cancelamento: linha.sol_data_cancelamento ?? null,
                 sol_origem_id: linha.sol_origem_id ?? null,
+                // retirada recorrente: 1 = primeira, 2 = segunda...
+                sol_ciclo: Number(linha.sol_ciclo ?? 1),
                 sol_recado: linha.sol_recado ?? null,
                 // data anterior quando o admin remarcou (aviso "remarcado")
                 sol_data_anterior: linha.sol_data_anterior ?? null,
@@ -78,6 +75,7 @@ const SELECT_AGENDAMENTO = [
     'sol.sol_motivo_cancelamento',
     'sol.sol_data_cancelamento',
     'sol.sol_origem_id',
+    'sol.sol_ciclo',
     'sol.sol_recado',
     'sol.sol_data_anterior',
 
@@ -315,6 +313,7 @@ export default {
             // VÍNCULO COM A PRESCRIÇÃO AUTORIZADA (quando o agendamento
             // nasce de "Agendar" numa prescrição autorizada)
             let origemId = null;
+            let ciclo = 1;
 
             if (sol_origem_id !== undefined && sol_origem_id !== null && sol_origem_id !== '') {
                 origemId = Number(sol_origem_id);
@@ -327,7 +326,7 @@ export default {
                 const origem = await trx('solicitacao')
                     .where('sol_id', origemId)
                     .forUpdate()
-                    .first('sol_id', 'pac_id', 'sol_status', 'sol_data_vencimento');
+                    .first('sol_id', 'pac_id', 'sol_status', 'sol_data_vencimento', 'sol_periodicidade_dias');
 
                 if (!origem) {
                     return falhar(404, 'Prescrição de origem não encontrada');
@@ -350,17 +349,24 @@ export default {
                     return falhar(400, `A data da coleta não pode ser depois do vencimento da prescrição (${dataBR(vencimento)}).`);
                 }
 
-                const agendamentoAtivo = await trx('solicitacao')
+                // Um agendamento em aberto por prescrição. Retirada única: depois
+                // de concluída, acabou. Uso contínuo: cada retirada concluída
+                // libera o ciclo seguinte (até o vencimento).
+                const ativos = await trx('solicitacao')
                     .where('sol_origem_id', origemId)
                     .whereIn('sol_status', STATUS_AGENDAMENTO_ATIVO)
-                    .first('sol_id', 'sol_protocolo');
+                    .orderBy('sol_id', 'desc')
+                    .select('sol_id', 'sol_protocolo', 'sol_status', 'sol_ciclo');
+                const emAberto = ativos.find((a) => a.sol_status === 'agendado');
+                const bloqueio = emAberto ?? (origem.sol_periodicidade_dias ? null : ativos[0]);
 
-                if (agendamentoAtivo) {
+                if (bloqueio) {
                     return falhar(
                         409,
-                        `Esta prescrição já possui um agendamento (protocolo ${agendamentoAtivo.sol_protocolo ?? agendamentoAtivo.sol_id})`
+                        `Esta prescrição já possui um agendamento (protocolo ${bloqueio.sol_protocolo ?? bloqueio.sol_id})`
                     );
                 }
+                ciclo = ativos.reduce((maior, a) => Math.max(maior, Number(a.sol_ciclo) || 1), 0) + 1;
             }
 
             // INSUMOS DO ESTOQUE DA UNIDADE
@@ -421,6 +427,7 @@ export default {
                     sol_status: 'agendado',
                     sol_insumo_quant: 0,
                     sol_origem_id: origemId,
+                    sol_ciclo: ciclo,
                     sol_codigo_qr: randomUUID()
                 })
                 .returning('sol_id');
@@ -452,6 +459,7 @@ export default {
             const cancelado = origemId
                 ? await trx('solicitacao')
                     .where('sol_origem_id', origemId)
+                    .where('sol_ciclo', ciclo)
                     .whereIn('sol_status', STATUS_AGENDAMENTO_SEM_ENTREGA)
                     .orderBy('sol_id', 'desc')
                     .first('sol_protocolo', 'sol_id')
@@ -459,6 +467,7 @@ export default {
             const acao = cancelado ? ACOES.REAGENDADA : ACOES.AGENDADA;
             const detalheAgendamento =
                 `${protocolo} · coleta em ${sol_data_de_coleta.split('-').reverse().join('/')} · ${postoExiste.pos_nome}` +
+                (ciclo > 1 ? ` · ${ciclo}ª retirada` : '') +
                 (cancelado ? ` · substitui o agendamento cancelado ${cancelado.sol_protocolo ?? cancelado.sol_id}` : '');
             await registrarHistorico(trx, req.session, {
                 sol_id, acao, para: 'agendado', detalhe: detalheAgendamento,
@@ -476,7 +485,8 @@ export default {
             return res.status(201).send({
                 message: 'Agendamento criado com sucesso',
                 sol_id,
-                sol_protocolo: protocolo
+                sol_protocolo: protocolo,
+                sol_ciclo: ciclo
             });
 
         } catch (error) {

@@ -53,7 +53,15 @@ export async function carregarContexto(db, sol_id) {
 
   const ehAgendamento = STATUS_AGENDAMENTO.includes(sol.sol_status);
   let insumos = sol.ins_nome ? [sol.ins_nome] : [];
-  if (ehAgendamento) {
+  if (!ehAgendamento) {
+    // prescrição com vários insumos (etapa 2)
+    const itens = await db('solicitacao_item as it')
+      .leftJoin('insumo as i', 'i.ins_id', 'it.ins_id')
+      .where('it.sol_id', sol_id)
+      .orderBy('it.sit_id')
+      .pluck('i.ins_nome');
+    if (itens.length) insumos = itens;
+  } else {
     insumos = await db('coleta as c')
       .leftJoin('insumo as i', 'i.ins_id', 'c.ins_id')
       .where('c.sol_id', sol_id)

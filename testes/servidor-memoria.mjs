@@ -69,6 +69,11 @@ const migracao5 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10
 db.public.none(
   migracao5.slice(migracao5.indexOf('-- @pgmem-inicio'), migracao5.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
+// migração de 26/10 (etapa 2: itens da prescrição e retirada recorrente)
+const migracao6 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-26_itens_e_recorrencia.sql'), 'utf8');
+db.public.none(
+  migracao6.slice(migracao6.indexOf('-- @pgmem-inicio'), migracao6.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
 
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
