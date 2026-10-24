@@ -19,6 +19,13 @@ import { idValido } from "./utils/validacoes.js";
 import notificacoesControllers from "./controllers/notificacoesControllers.js";
 import autorizarCron from "./middleware/autorizarCron.js";
 import { limiteLeituraQR } from "./middleware/limiteLeituraQR.js";
+import equipeControllers from "./controllers/equipeControllers.js";
+import autorizarUniversal from "./middleware/autorizarUniversal.js";
+import agendaControllers from "./controllers/agendaControllers.js";
+import participacaoControllers from "./controllers/participacaoControllers.js";
+import autorizadosControllers from "./controllers/autorizadosControllers.js";
+import meusInsumosControllers from "./controllers/meusInsumosControllers.js";
+import gestaoControllers from "./controllers/gestaoControllers.js";
 
 
 const routes = express.Router();
@@ -46,6 +53,17 @@ routes.put(
 );
 // ficha completa do paciente (dados, prescrições e agendamentos) para o admin
 routes.get('/pacientes/:id/resumo', authorization, autorizarAdmin, pacientesControllers.resumoPaciente);
+// prioridade legal: o paciente declara, a unidade confere
+routes.patch('/pacientes/minha-prioridade', authorization, autorizarPaciente, pacientesControllers.minhaPrioridade);
+routes.patch('/pacientes/:id/prioridade', authorization, autorizarAdmin, pacientesControllers.conferirPrioridade);
+// pessoas autorizadas a retirar no lugar do paciente (a unidade cadastra; o paciente consulta)
+routes.get('/pacientes/:id/autorizados', authorization, autorizarAdmin, autorizadosControllers.listar);
+routes.post('/pacientes/:id/autorizados', authorization, autorizarAdmin, autorizadosControllers.criar);
+routes.put('/pacientes/:id/autorizados/:pau', authorization, autorizarAdmin, autorizadosControllers.atualizar);
+routes.delete('/pacientes/:id/autorizados/:pau', authorization, autorizarAdmin, autorizadosControllers.remover);
+routes.get('/meus-autorizados', authorization, autorizarPaciente, autorizadosControllers.meus);
+// insumos em uso do paciente, com "Indisponível" quando faltar na unidade
+routes.get('/meus-insumos', authorization, autorizarPaciente, meusInsumosControllers.listar);
 
 // Perfil pessoal do admin e do autorizador
 const autorizarAdminOuAut = (req, res, next) =>
@@ -54,12 +72,28 @@ const autorizarAdminOuAut = (req, res, next) =>
         : res.status(403).json({ error: 'Acesso restrito a administradores e autorizadores' });
 routes.get('/perfil', authorization, autorizarAdminOuAut, painelControllers.meuPerfil);
 routes.put('/perfil', authorization, autorizarAdminOuAut, painelControllers.atualizarMeuPerfil);
+// troca da própria senha (obrigatória no primeiro acesso com senha provisória)
+routes.put('/minha-senha', authorization, autorizarAdminOuAut, equipeControllers.trocarSenha);
+
+// Equipe da rede (só o admin universal): lista, cadastro direto com senha
+// provisória, desativar/reativar e convites para o cadastro pelo link
+routes.get('/equipe', authorization, autorizarUniversal, equipeControllers.listar);
+routes.post('/equipe', authorization, autorizarUniversal, equipeControllers.cadastrar);
+routes.patch('/equipe/:perfil/:id/ativo', authorization, autorizarUniversal, equipeControllers.alterarAtivo);
+// público: dados do convite para o formulário do link (perfil e unidade)
+routes.get('/convites/info', equipeControllers.infoConvite);
+routes.get('/convites', authorization, autorizarUniversal, equipeControllers.listarConvites);
+routes.post('/convites', authorization, autorizarUniversal, equipeControllers.criarConvite);
+routes.delete('/convites/:id', authorization, autorizarUniversal, equipeControllers.cancelarConvite);
 
 // Home do admin (fila de trabalho)
 routes.get('/painel/admin', authorization, autorizarAdmin, painelControllers.painelAdmin);
 // Home do autorizador
 routes.get('/painel/autorizador', authorization, autorizarAut, autorizadorControllers.painelAutorizador);
 // atividades da unidade (histórico geral de quem fez o quê)
+// previsão de demanda por insumo (30, 60 ou 90 dias)
+routes.get('/indicadores/previsao', authorization, autorizarAdmin, gestaoControllers.previsao);
+
 routes.get('/atividades', authorization, autorizarAdmin, painelControllers.atividades);
 
 routes.post('/login', limiteLogin, administradorControllers.loginGeral)
@@ -71,6 +105,12 @@ routes.get('/validar', authorization, (req, res)=>{
 
 //Rotas do posto de coleta 
 
+// horário da unidade: leitura pública; turnos, vagas e dias fechados pelo admin
+routes.get('/postos/:id/horarios', agendaControllers.horarios);
+routes.put('/postos/:id/horarios', authorization, autorizarAdmin, agendaControllers.salvarHorarios);
+routes.post('/postos/:id/bloqueios', authorization, autorizarAdmin, agendaControllers.criarBloqueio);
+routes.delete('/postos/:id/bloqueios/:bloqueio', authorization, autorizarAdmin, agendaControllers.removerBloqueio);
+routes.get('/postos/:id/agenda', authorization, autorizarAdmin, agendaControllers.ocupacao);
 routes.get('/postos/:id' , postocoleta.listarporid)
 routes.get('/postos' , postocoleta.listar)
 
@@ -79,10 +119,12 @@ routes.get('/postos' , postocoleta.listar)
 
 routes.get('/administradorall', authorization, autorizarAdmin, administradorControllers.administradorall);
 
+// cadastro pelo link do convite (o controller exige um convite válido)
 routes.post('/administrador', administradorControllers.createadministrador);
 
 //rotas autorizador
 routes.get('/autorizadorall',authorization,autorizarAut, autorizadorControllers.autorizadorrall);
+// cadastro pelo link do convite (o controller exige um convite válido)
 routes.post('/autorizador',  autorizadorControllers.createautorizador);
 routes.get('/prescricao/aprovadas',authorization,autorizarAut, autorizadorControllers.buscarPrescricoesAprovadas);
 
@@ -112,6 +154,8 @@ routes.patch(
 
 //agendamento
 routes.get('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.listar);
+// lista de separação do dia (por insumo e por paciente)
+routes.get('/agendamentos/separacao', authorization, autorizarAdmin, gestaoControllers.separacao);
 routes.get('/agendamentos/datas-sugeridas', authorization, autorizarAdmin, painelControllers.datasSugeridas);
 routes.post('/agendamentos', authorization, autorizarAdmin, agendamentosControllers.criar);
 
@@ -126,9 +170,15 @@ routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, valida
 routes.patch('/agendamentos/:id/recado', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.salvarRecado);
 // nova data no mesmo agendamento (mesmo protocolo)
 routes.patch('/agendamentos/:id/remarcar', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.remarcar);
+routes.patch('/agendamentos/:id/pedido-outra-data', authorization, autorizarAdmin, validarAcessoSolicitacao, participacaoControllers.responderPedido);
 
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);
+// o paciente na agenda: outra data, presença e cancelamento do próprio agendamento
+routes.get('/meus-agendamentos/:id/opcoes', authorization, autorizarPaciente, participacaoControllers.opcoes);
+routes.post('/meus-agendamentos/:id/outra-data', authorization, autorizarPaciente, participacaoControllers.pedirOutraData);
+routes.patch('/meus-agendamentos/:id/presenca', authorization, autorizarPaciente, participacaoControllers.presenca);
+routes.patch('/meus-agendamentos/:id/cancelar', authorization, autorizarPaciente, participacaoControllers.cancelarPeloPaciente);
 
 //rotas insumos
 routes.patch('/insumos/:id', authorization,autorizarAdmin, insumosControllers.movimentar);

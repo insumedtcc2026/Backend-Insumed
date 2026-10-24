@@ -1,11 +1,13 @@
 import knex from '../database/index.js';
+import { comItens } from '../utils/itensPrescricao.js';
+import { prioridadeDoPaciente } from '../utils/prioridade.js';
 import { STATUS_AGENDAMENTO } from '../utils/status.js';
 import bcrypt from 'bcrypt';
 import {
   coletarErros, formatarCEP, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome,
   somenteDigitos, validarCEP, validarConfirmacaoSenha, validarCPF, validarDataNascimento,
   validarEmail, validarNome, validarObrigatorio, validarSenha, validarTelefone, whereCpf,
-  mensagemErroBanco, normalizarRaca, normalizarSexo,
+  mensagemErroBanco, normalizarRaca, normalizarSexo, dataHojeBrasil,
 } from '../utils/validacoes.js';
 import { emailEmUso } from '../utils/contas.js';
 
@@ -215,6 +217,59 @@ export default {
 },
   
 
+  // PRIORIDADE LEGAL declarada pelo paciente (deficiência, gestação). Só
+  // conta na fila depois que a unidade confere; mudar a declaração volta
+  // para "aguardando conferência".
+  async minhaPrioridade(req, res) {
+    try {
+      const { pcd, gestante } = req.body ?? {};
+      if (typeof pcd !== 'boolean' || typeof gestante !== 'boolean') {
+        return res.status(400).json({ erro: 'Informe se é pessoa com deficiência e se é gestante (sim ou não).' });
+      }
+      const atual = await knex('pacientes').where('pac_id', req.session.id).first('pac_pcd', 'pac_gestante', 'pac_prioridade_conferida');
+      if (!atual) return res.status(404).json({ erro: 'Paciente não encontrado.' });
+      const mudou = Boolean(atual.pac_pcd) !== pcd || Boolean(atual.pac_gestante) !== gestante;
+      await knex('pacientes').where('pac_id', req.session.id).update({
+        pac_pcd: pcd,
+        pac_gestante: gestante,
+        pac_prioridade_conferida: mudou || !(pcd || gestante) ? null : atual.pac_prioridade_conferida,
+      });
+      const paciente = await knex('pacientes').where('pac_id', req.session.id).first();
+      return res.status(200).json({
+        mensagem: pcd || gestante
+          ? 'Informação registrada. A unidade vai conferir no seu próximo atendimento.'
+          : 'Informação registrada.',
+        usuario: semSenha(paciente),
+        prioridade: prioridadeDoPaciente(paciente, dataHojeBrasil()),
+      });
+    } catch (error) {
+      console.error('Erro ao registrar prioridade:', error);
+      return res.status(500).json({ erro: 'Erro ao registrar a informação.' });
+    }
+  },
+
+  // A unidade confere a declaração (documento, laudo, cartão da gestante)
+  async conferirPrioridade(req, res) {
+    try {
+      const { conferida } = req.body ?? {};
+      if (typeof conferida !== 'boolean') return res.status(400).json({ error: 'Informe se a declaração foi confirmada.' });
+      const paciente = await knex('pacientes').where('pac_id', Number(req.params.id)).first();
+      if (!paciente) return res.status(404).json({ error: 'Paciente não encontrado' });
+      if (!paciente.pac_pcd && !paciente.pac_gestante) {
+        return res.status(409).json({ error: 'O paciente não declarou deficiência nem gestação.' });
+      }
+      await knex('pacientes').where('pac_id', paciente.pac_id).update({ pac_prioridade_conferida: conferida });
+      const atualizado = { ...paciente, pac_prioridade_conferida: conferida };
+      return res.status(200).json({
+        message: conferida ? 'Prioridade confirmada.' : 'Declaração não confirmada; o paciente segue na ordem de chegada.',
+        prioridade: prioridadeDoPaciente(atualizado, dataHojeBrasil()),
+      });
+    } catch (error) {
+      console.error('Erro ao conferir prioridade:', error);
+      return res.status(500).json({ error: 'Erro ao conferir a prioridade' });
+    }
+  },
+
   // Busca de pacientes para o admin: por CPF (com ou sem pontuação) ou por
   // nome. Aceita ?cpf= (formato antigo) ou ?busca=.
   async buscarPorCpf(req, res) {
@@ -257,7 +312,7 @@ export default {
           'sol.sol_id', 'sol.sol_status', 'sol.sol_protocolo', 'sol.sol_data_solicitacao',
           'sol.sol_data_de_coleta', 'sol.sol_data_vencimento', 'sol.sol_insumo_quant',
           'sol.sol_motivo_nao_autorizado', 'sol.sol_motivo_reenvio', 'sol.sol_motivo_cancelamento',
-          'sol.sol_origem_id', 'sol.pos_id', 'pos.pos_nome', 'ins.ins_nome',
+          'sol.sol_origem_id', 'sol.sol_ciclo', 'sol.sol_periodicidade_dias', 'sol.pos_id', 'pos.pos_nome', 'ins.ins_nome',
           knex.raw('(sol.sol_prescricao IS NOT NULL) AS tem_prescricao'),
         )
         .orderBy('sol.sol_id', 'desc');
@@ -279,8 +334,8 @@ export default {
       }));
 
       return res.status(200).send({
-        paciente: semSenha(paciente),
-        prescricoes: solicitacoes.filter((s) => !ehAgendamento(s)),
+        paciente: { ...semSenha(paciente), prioridade: prioridadeDoPaciente(paciente, dataHojeBrasil()) },
+        prescricoes: await comItens(solicitacoes.filter((s) => !ehAgendamento(s))),
         agendamentos,
       });
     } catch (error) {

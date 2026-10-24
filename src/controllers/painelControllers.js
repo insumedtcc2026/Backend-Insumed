@@ -7,6 +7,8 @@ import {
   validarDataISO, validarEmail, validarNome, validarTelefone,
 } from '../utils/validacoes.js';
 import { ACOES } from '../utils/historico.js';
+import { agendaDoPosto } from '../utils/agenda.js';
+import { somarDias } from '../utils/status.js';
 
 // Insumo com quantidade até este valor aparece como "estoque baixo" no painel.
 export const LIMITE_ESTOQUE_BAIXO = 5;
@@ -244,38 +246,39 @@ export default {
         return res.status(400).json({ message: 'Informe o posto de coleta' });
       }
 
-      // dias úteis a partir de amanhã (segunda a sexta)
-      const dias = [];
-      const base = new Date(`${dataHojeBrasil()}T12:00:00Z`);
-      for (let i = 1; dias.length < DIAS_SUGESTAO && i < DIAS_SUGESTAO * 2; i++) {
-        const d = new Date(base.getTime() + i * 86400000);
-        const semana = d.getUTCDay();
-        if (semana !== 0 && semana !== 6) dias.push(d.toISOString().slice(0, 10));
-      }
+      // dia e turno a partir de amanhã, dentro do horário da unidade, sem os
+      // dias fechados e com as vagas livres de cada turno
+      const amanha = somarDias(dataHojeBrasil(), 1);
+      const ate = req.query.ate && !validarDataISO(req.query.ate) ? req.query.ate : null;
+      const ignorar = Number(req.query.ignorar) || null;
+      const turnos = (await agendaDoPosto(pos_id, amanha, somarDias(amanha, DIAS_SUGESTAO * 2), { ignorarSolId: ignorar }))
+        .filter((t) => !ate || t.data <= ate);
 
-      const linhas = await knex('solicitacao')
-        .where('pos_id', pos_id)
-        .where('sol_status', 'agendado')
-        .whereBetween('sol_data_de_coleta', [dias[0], dias[dias.length - 1]])
-        .select('sol_data_de_coleta')
-        .count({ total: '*' })
-        .groupBy('sol_data_de_coleta');
+      const abertos = turnos.filter((t) => !t.fechado_motivo);
+      const comVaga = abertos.filter((t) => t.livres === null || t.livres > 0);
+      const opcoes = comVaga.slice(0, DIAS_SUGESTAO * 2);
 
-      const porDia = new Map(
-        linhas.map((l) => {
-          const data = l.sol_data_de_coleta instanceof Date
-            ? l.sol_data_de_coleta.toISOString().slice(0, 10)
-            : String(l.sol_data_de_coleta).slice(0, 10);
-          return [data, Number(l.total)];
-        }),
-      );
+      // formato antigo: um item por dia (soma dos turnos)
+      const porDia = new Map();
+      for (const t of abertos) porDia.set(t.data, (porDia.get(t.data) ?? 0) + t.ocupadas);
+      const datas = [...porDia].slice(0, DIAS_SUGESTAO).map(([data, agendados]) => ({ data, agendados }));
 
-      const datas = dias.map((data) => ({ data, agendados: porDia.get(data) ?? 0 }));
-      const menores = [...datas].sort((a, b) => a.agendados - b.agendados || a.data.localeCompare(b.data)).slice(0, 3);
+      // as 3 opções mais vazias (proporção de vagas ocupadas; sem limite conta pelo número)
+      const lotacao = (t) => (t.vagas ? t.ocupadas / t.vagas : t.ocupadas / 1000);
+      const melhores = [...opcoes].sort((a, b) => lotacao(a) - lotacao(b) || a.data.localeCompare(b.data)).slice(0, 3)
+        .sort((a, b) => a.data.localeCompare(b.data) || a.turno.localeCompare(b.turno));
+
+      // formato antigo: as 3 datas com vaga e menos coletas
+      const diasComVaga = new Set(comVaga.map((t) => t.data));
+      const sugeridas = datas.filter((d) => diasComVaga.has(d.data))
+        .sort((a, b) => a.agendados - b.agendados || a.data.localeCompare(b.data))
+        .slice(0, 3).map((d) => d.data).sort();
 
       return res.status(200).json({
         datas,
-        sugeridas: menores.map((d) => d.data).sort(),
+        sugeridas,
+        opcoes,
+        sugeridas_turnos: melhores,
       });
     } catch (error) {
       console.error('Erro ao sugerir datas:', error);

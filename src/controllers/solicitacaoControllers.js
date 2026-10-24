@@ -5,6 +5,8 @@ import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
 import { COLUNA_VERSOES, numerarVersoes, versoesJoin } from '../utils/versoes.js';
 import { dataBR, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
 import { notificar } from '../notificacoes/processador.js';
+import { comItens, lerItens, lerPeriodicidade, resumoRecorrencia, salvarItens } from '../utils/itensPrescricao.js';
+import { COLUNAS_PRIORIDADE, comPrioridade, ordemPrioridade } from '../utils/prioridade.js';
 
 // Mesmo limite do formulário de envio (EnviarSolicitacao.tsx)
 const TAMANHO_MAX_PRESCRICAO = 5 * 1024 * 1024;
@@ -171,9 +173,13 @@ async buscarprescricoespendetes(req, res) {
                 "pac.pac_nome",
                 "pac.pac_cpf",
                 "pac.pac_avatar",
+                ...COLUNAS_PRIORIDADE,
+                "sol.sol_periodicidade_dias",
                 // prescrição autorizada que já virou agendamento (agendado ou
                 // concluído): a tela troca "Agendar" por "Ver agendamento"
                 knex.raw("(ag.sol_origem_id IS NOT NULL) AS agendamento_ativo"),
+                // uso contínuo: só um ciclo "agendado" bloqueia o próximo
+                knex.raw("(aberto.sol_origem_id IS NOT NULL) AS agendamento_em_aberto"),
                 // quantas versões anteriores (> 0 = o paciente já corrigiu após pedido de reenvio)
                 COLUNA_VERSOES
             )
@@ -187,12 +193,24 @@ async buscarprescricoespendetes(req, res) {
                 "ag.sol_origem_id",
                 "sol.sol_id"
             )
+            .leftJoin(
+                knex("solicitacao")
+                    .select("sol_origem_id")
+                    .whereNotNull("sol_origem_id")
+                    .where("sol_status", "agendado")
+                    .groupBy("sol_origem_id")
+                    .as("aberto"),
+                "aberto.sol_origem_id",
+                "sol.sol_id"
+            )
             .whereIn("sol.sol_status", [
                 "Pendente",
                 "Autorizado",
                 "Revisado",
                 "Nao Autorizado"
             ])
+            // prioridade legal (80+, depois 60+/PcD/gestante) e, dentro dela, a data de envio
+            .orderBy(ordemPrioridade(dataHojeBrasil()))
             .orderBy(
                 "sol.sol_data_solicitacao",
                 "asc"
@@ -210,7 +228,12 @@ async buscarprescricoespendetes(req, res) {
         }
 
 
-        const solicitacoes = numerarVersoes(await query);
+        const solicitacoes = comPrioridade(numerarVersoes(await query), dataHojeBrasil())
+            .map(({ agendamento_em_aberto, ...s }) => ({
+                ...s,
+                // uso contínuo: com a retirada anterior concluída, pode agendar o próximo ciclo
+                agendamento_ativo: s.sol_periodicidade_dias ? Boolean(agendamento_em_aberto) : Boolean(s.agendamento_ativo),
+            }));
 
         return res.status(200).json(solicitacoes);
 
@@ -355,12 +378,7 @@ async alterarStatus(req, res) {
     try {
         const { id } = req.params;
 
-        const {
-            sol_status,
-            sol_data_vencimento,
-            ins_id,
-            sol_insumo_quant
-        } = req.body ?? {};
+        const { sol_status, sol_data_vencimento } = req.body ?? {};
 
         if (!sol_status) {
             return res.status(400).json({
@@ -374,24 +392,16 @@ async alterarStatus(req, res) {
             });
         }
 
-        if (!ins_id) {
-            return res.status(400).json({
-                error: "Insumo não informado"
-            });
+        // vários insumos ({ itens: [...] }) ou o formato antigo (ins_id + sol_insumo_quant)
+        const { itens, erro: erroItens } = lerItens(req.body);
+        if (erroItens) {
+            return res.status(400).json({ error: erroItens });
         }
 
-        if (!idValido(ins_id)) {
-            return res.status(400).json({
-                error: "Insumo inválido"
-            });
-        }
-
-        const quantidade = Number(sol_insumo_quant);
-
-        if (!Number.isInteger(quantidade) || quantidade <= 0) {
-            return res.status(400).json({
-                error: "Quantidade de insumo inválida"
-            });
+        // uso contínuo: uma retirada a cada N dias até o vencimento
+        const { dias: periodicidade, erro: erroPeriodicidade } = lerPeriodicidade(req.body?.sol_periodicidade_dias);
+        if (erroPeriodicidade) {
+            return res.status(400).json({ error: erroPeriodicidade });
         }
 
         if (!sol_data_vencimento) {
@@ -412,13 +422,33 @@ async alterarStatus(req, res) {
             });
         }
 
-        const insumo = await knex("insumo").where("ins_id", Number(ins_id)).first("ins_id", "ins_nome");
-
-        if (!insumo) {
+        const prescricao = await knex("solicitacao").where("sol_id", id).first("sol_id", "pos_id");
+        if (!prescricao) {
             return res.status(404).json({
-                error: "Insumo não encontrado"
+                error: "Solicitação não encontrada"
             });
         }
+
+        // os insumos têm de ser do estoque da unidade da prescrição: é de
+        // lá que sai a retirada
+        const insumos = await knex("insumo")
+            .whereIn("ins_id", itens.map((i) => i.ins_id))
+            .select("ins_id", "ins_nome", "pos_id");
+        const nomes = new Map(insumos.map((i) => [Number(i.ins_id), i]));
+        const foraDoPosto = itens.find((i) => {
+            const insumo = nomes.get(i.ins_id);
+            return !insumo || (insumo.pos_id != null && prescricao.pos_id != null && Number(insumo.pos_id) !== Number(prescricao.pos_id));
+        });
+        if (foraDoPosto) {
+            return res.status(nomes.has(foraDoPosto.ins_id) ? 400 : 404).json({
+                error: nomes.has(foraDoPosto.ins_id)
+                    ? `"${nomes.get(foraDoPosto.ins_id).ins_nome}" não é do estoque da unidade desta prescrição.`
+                    : "Insumo não encontrado"
+            });
+        }
+
+        const [primeiro] = itens;
+        const descricao = itens.map((i) => `${i.quantidade}x ${nomes.get(i.ins_id).ins_nome}`).join(", ");
 
         // UPDATE condicional: só sai de "Pendente". Duas revisões
         // simultâneas não sobrescrevem uma à outra.
@@ -429,28 +459,24 @@ async alterarStatus(req, res) {
                 .update({
                     sol_status,
                     sol_data_vencimento,
-                    ins_id: Number(ins_id),
-                    sol_insumo_quant: quantidade
+                    // colunas antigas: o primeiro item (telas e relatórios antigos)
+                    ins_id: primeiro.ins_id,
+                    sol_insumo_quant: primeiro.quantidade,
+                    sol_periodicidade_dias: periodicidade,
                 });
 
             if (n) {
+                await salvarItens(trx, Number(id), itens);
                 await registrarHistorico(trx, req.session, {
                     sol_id: Number(id), acao: ACOES.REVISADA, de: "Pendente", para: "Revisado",
-                    detalhe: `${quantidade}x ${insumo.ins_nome} · vence em ${sol_data_vencimento.split("-").reverse().join("/")}`,
+                    detalhe: `${descricao} · vence em ${sol_data_vencimento.split("-").reverse().join("/")}` +
+                        (periodicidade ? ` · uso contínuo, a cada ${periodicidade} dias` : ""),
                 });
             }
             return n;
         });
 
         if (!quantidadeAtualizada) {
-            const existe = await knex("solicitacao").where("sol_id", id).first("sol_status");
-
-            if (!existe) {
-                return res.status(404).json({
-                    error: "Solicitação não encontrada"
-                });
-            }
-
             return res.status(409).json({
                 error: "Esta prescrição já foi analisada e não pode ser revisada novamente."
             });
@@ -461,8 +487,10 @@ async alterarStatus(req, res) {
         return res.status(200).json({
             message: "Solicitação atualizada com sucesso",
             sol_status,
-            ins_id: Number(ins_id),
-            quantidade
+            ins_id: primeiro.ins_id,
+            quantidade: primeiro.quantidade,
+            itens,
+            sol_periodicidade_dias: periodicidade,
         });
 
     } catch (error) {
@@ -498,6 +526,7 @@ async buscarSolicitacaoPorId(req, res) {
         "sol.sol_motivo_nao_autorizado",
         "sol.sol_data_vencimento",
         "sol.sol_observacao_equipe",
+        "sol.sol_periodicidade_dias",
         "pac.pac_nome",
         "pac.pac_cpf",
         "pos.pos_nome",
@@ -512,7 +541,7 @@ async buscarSolicitacaoPorId(req, res) {
       });
     }
 
-    return res.status(200).json(solicitacao);
+    return res.status(200).json(await comItens(solicitacao));
 
   } catch (error) {
     console.error("Erro ao buscar solicitação:", error);
@@ -560,15 +589,17 @@ async buscarHistoricoPrescricoes(req, res) {
             "sol.sol_data_solicitacao", "sol.sol_data_vencimento",
             "sol.sol_motivo_nao_autorizado", "sol.sol_motivo_reenvio",
             "sol.sol_insumo_quant", "sol.sol_observacao", "sol.sol_prescricao_tipo",
+            "sol.sol_periodicidade_dias",
             "pac.pac_nome", "pac.pac_cpf", "pac.pac_avatar",
             "ins.ins_nome", "pos.pos_nome",
         ).orderBy("sol.sol_data_solicitacao", "desc").orderBy("sol.sol_id", "desc");
 
         if (req.query.page !== undefined) {
-            return res.status(200).json(await paginar(query, montar, req.query));
+            const pagina = await paginar(query, montar, req.query);
+            return res.status(200).json({ ...pagina, itens: await comItens(pagina.itens) });
         }
 
-        return res.status(200).json(await query.modify(montar));
+        return res.status(200).json(await comItens(await query.modify(montar)));
 
     } catch (error) {
         console.error("Erro ao buscar histórico:", error);
@@ -747,6 +778,7 @@ async minhasPrescricoes(req, res) {
         "sol.sol_observacao", "sol.sol_prescricao_tipo", "sol.sol_insumo_quant",
         "sol.sol_motivo_nao_autorizado", "sol.sol_motivo_reenvio",
         "sol.pos_id", "pos.pos_nome", "pos.pos_whatsapp", "ins.ins_nome",
+        "sol.sol_periodicidade_dias",
         knex.raw("(sol.sol_prescricao IS NOT NULL) AS tem_prescricao"),
         COLUNA_VERSOES,
       )
@@ -766,7 +798,7 @@ async minhasPrescricoes(req, res) {
         .offset((paginaAtual - 1) * porPagina);
     }
 
-    const prescricoes = numerarVersoes(await consulta);
+    const prescricoes = await comItens(numerarVersoes(await consulta));
     const ids = prescricoes.map((p) => p.sol_id);
 
     const agendamentos = ids.length
@@ -776,7 +808,7 @@ async minhasPrescricoes(req, res) {
         .where("ag.pac_id", pac_id)
         .select(
           "ag.sol_id", "ag.sol_origem_id", "ag.sol_status", "ag.sol_protocolo", "ag.sol_data_de_coleta",
-          "ag.sol_motivo_cancelamento", "ag.sol_data_cancelamento", "ag.sol_recado", "ag.sol_data_anterior",
+          "ag.sol_ciclo", "ag.sol_motivo_cancelamento", "ag.sol_data_cancelamento", "ag.sol_recado", "ag.sol_data_anterior",
           "pos.pos_nome", "pos.pos_endereco", "pos.pos_whatsapp",
         )
         .orderBy("ag.sol_id", "desc")
@@ -799,6 +831,8 @@ async minhasPrescricoes(req, res) {
           .map(({ sol_id, sol_status, sol_protocolo, sol_data_de_coleta, sol_motivo_cancelamento, sol_data_cancelamento }) =>
             ({ sol_id, sol_status, sol_protocolo, sol_data_de_coleta, sol_motivo_cancelamento, sol_data_cancelamento })),
         eventos: eventos.filter((e) => idsDoItem.has(e.sol_id)),
+        // uso contínuo: retiradas já feitas e a data prevista da próxima
+        ...resumoRecorrencia(p, doItem),
       };
     });
 

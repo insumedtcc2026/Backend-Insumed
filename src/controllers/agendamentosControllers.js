@@ -3,17 +3,15 @@ import knex from '../database/index.js';
 import { cpfParcial, dataHojeBrasil, idValido, lerCodigoQR, validarDataISO, validarMotivo } from '../utils/validacoes.js';
 import { registrarFalhaLeituraQR } from '../middleware/limiteLeituraQR.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
-import { dataBR, isoData, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_ATIVO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
+import { dataBR, gerarProtocolo, isoData, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_ATIVO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
 import { idDoAdmin } from '../utils/contas.js';
 import { notificar } from '../notificacoes/processador.js';
 import { avisarEstoque } from '../notificacoes/estoque.js';
+import { reservados } from '../utils/estoque.js';
+import { conferirVaga, ROTULO_TURNO } from '../utils/agenda.js';
+import { autorizadosDoPaciente } from './autorizadosControllers.js';
 
 const TAMANHO_MAX_RECADO = 300;
-
-// Monta o protocolo de atendimento a partir do sol_id, ex: sol_id 42 -> "AG000042"
-function gerarProtocolo(sol_id) {
-    return `AG${String(sol_id).padStart(6, '0')}`;
-}
 
 // Agrupa as linhas "achatadas" do JOIN (uma linha por insumo) no formato
 // aninhado que o frontend espera (um objeto por agendamento, com um
@@ -31,6 +29,23 @@ function agruparPorAgendamento(resultado) {
                 sol_motivo_cancelamento: linha.sol_motivo_cancelamento ?? null,
                 sol_data_cancelamento: linha.sol_data_cancelamento ?? null,
                 sol_origem_id: linha.sol_origem_id ?? null,
+                // retirada recorrente: 1 = primeira, 2 = segunda...
+                sol_ciclo: Number(linha.sol_ciclo ?? 1),
+                sol_turno: linha.sol_turno ?? null,
+                // pedido de outra data feito pelo paciente (pedido | aceito | recusado)
+                pedido_outra_data: linha.sol_pedido_situacao
+                    ? {
+                        situacao: linha.sol_pedido_situacao,
+                        data: linha.sol_pedido_data ?? null,
+                        turno: linha.sol_pedido_turno ?? null,
+                        motivo: linha.sol_pedido_motivo ?? null,
+                        resposta: linha.sol_pedido_resposta ?? null,
+                    }
+                    : null,
+                // confirmação de presença: 'vou' | 'nao_vou' | null (sem resposta)
+                sol_presenca: linha.sol_presenca ?? null,
+                // quem retirou no lugar do paciente (vazio = o próprio paciente)
+                sol_retirado_por_nome: linha.sol_retirado_por_nome ?? null,
                 sol_recado: linha.sol_recado ?? null,
                 // data anterior quando o admin remarcou (aviso "remarcado")
                 sol_data_anterior: linha.sol_data_anterior ?? null,
@@ -77,6 +92,15 @@ const SELECT_AGENDAMENTO = [
     'sol.sol_motivo_cancelamento',
     'sol.sol_data_cancelamento',
     'sol.sol_origem_id',
+    'sol.sol_ciclo',
+    'sol.sol_turno',
+    'sol.sol_pedido_situacao',
+    'sol.sol_pedido_data',
+    'sol.sol_pedido_turno',
+    'sol.sol_pedido_motivo',
+    'sol.sol_pedido_resposta',
+    'sol.sol_presenca',
+    'sol.sol_retirado_por_nome',
     'sol.sol_recado',
     'sol.sol_data_anterior',
 
@@ -181,6 +205,11 @@ export default {
 
                 if (status && status !== 'todos') qb.where('sol.sol_status', status);
 
+                // aba "Pedidos de outra data": só os que esperam resposta
+                if (req.query.pedido === 'pendente') {
+                    qb.where('sol.sol_status', 'agendado').where('sol.sol_pedido_situacao', 'pedido');
+                }
+
                 if (busca && busca.trim()) {
                     const termo = busca.trim();
                     const termoCpf = termo.replace(/\D/g, '');
@@ -242,7 +271,7 @@ export default {
 
         try {
 
-            const { paciente, sol_data_de_coleta, posto, itens, sol_origem_id } = req.body ?? {};
+            const { paciente, sol_data_de_coleta, posto, itens, sol_origem_id, sol_turno } = req.body ?? {};
 
             // VALIDAÇÕES
 
@@ -277,12 +306,19 @@ export default {
                 return falhar(400, 'Nenhum insumo informado');
             }
 
+            // cada item vem com o ins_id (escolhido no estoque da unidade) ou,
+            // em clientes antigos, só com o nome do insumo
             for (const item of itens) {
+                const temId = item?.ins_id !== undefined && item?.ins_id !== null && item?.ins_id !== '';
                 const nome = typeof item?.ins_nome === 'string' ? item.ins_nome.trim() : '';
                 const quantidade = Number(item?.quantidade);
 
-                if (!nome || !Number.isFinite(quantidade)) {
+                if ((!temId && !nome) || !Number.isFinite(quantidade)) {
                     return falhar(400, 'Cada insumo precisa de nome e quantidade');
+                }
+
+                if (temId && !idValido(item.ins_id)) {
+                    return falhar(400, 'Insumo inválido');
                 }
 
                 if (nome.length > TAMANHO_MAX_NOME_INSUMO) {
@@ -290,7 +326,7 @@ export default {
                 }
 
                 if (!Number.isInteger(quantidade) || quantidade <= 0) {
-                    return falhar(400, `Quantidade inválida para "${nome}". Informe um número inteiro maior que zero`);
+                    return falhar(400, `Quantidade inválida para "${nome || 'o insumo'}". Informe um número inteiro maior que zero`);
                 }
             }
 
@@ -307,6 +343,7 @@ export default {
             // VÍNCULO COM A PRESCRIÇÃO AUTORIZADA (quando o agendamento
             // nasce de "Agendar" numa prescrição autorizada)
             let origemId = null;
+            let ciclo = 1;
 
             if (sol_origem_id !== undefined && sol_origem_id !== null && sol_origem_id !== '') {
                 origemId = Number(sol_origem_id);
@@ -319,7 +356,7 @@ export default {
                 const origem = await trx('solicitacao')
                     .where('sol_id', origemId)
                     .forUpdate()
-                    .first('sol_id', 'pac_id', 'sol_status', 'sol_data_vencimento');
+                    .first('sol_id', 'pac_id', 'sol_status', 'sol_data_vencimento', 'sol_periodicidade_dias');
 
                 if (!origem) {
                     return falhar(404, 'Prescrição de origem não encontrada');
@@ -342,17 +379,79 @@ export default {
                     return falhar(400, `A data da coleta não pode ser depois do vencimento da prescrição (${dataBR(vencimento)}).`);
                 }
 
-                const agendamentoAtivo = await trx('solicitacao')
+                // Um agendamento em aberto por prescrição. Retirada única: depois
+                // de concluída, acabou. Uso contínuo: cada retirada concluída
+                // libera o ciclo seguinte (até o vencimento).
+                const ativos = await trx('solicitacao')
                     .where('sol_origem_id', origemId)
                     .whereIn('sol_status', STATUS_AGENDAMENTO_ATIVO)
-                    .first('sol_id', 'sol_protocolo');
+                    .orderBy('sol_id', 'desc')
+                    .select('sol_id', 'sol_protocolo', 'sol_status', 'sol_ciclo');
+                const emAberto = ativos.find((a) => a.sol_status === 'agendado');
+                const bloqueio = emAberto ?? (origem.sol_periodicidade_dias ? null : ativos[0]);
 
-                if (agendamentoAtivo) {
+                if (bloqueio) {
                     return falhar(
                         409,
-                        `Esta prescrição já possui um agendamento (protocolo ${agendamentoAtivo.sol_protocolo ?? agendamentoAtivo.sol_id})`
+                        `Esta prescrição já possui um agendamento (protocolo ${bloqueio.sol_protocolo ?? bloqueio.sol_id})`
                     );
                 }
+                ciclo = ativos.reduce((maior, a) => Math.max(maior, Number(a.sol_ciclo) || 1), 0) + 1;
+            }
+
+            // DIA E TURNO: dentro do horário da unidade e com vaga. Sem turno
+            // (clientes antigos), fica o primeiro turno do dia com vaga.
+            const vaga = await conferirVaga(pos_id, sol_data_de_coleta, sol_turno, { db: trx });
+            if (vaga.erro) {
+                return falhar(409, vaga.erro);
+            }
+
+            // INSUMOS DO ESTOQUE DA UNIDADE
+            // O insumo tem de ser da unidade do agendamento: assim a baixa na
+            // conclusão sai do estoque certo. Nada é criado por aqui.
+            const porInsumo = new Map();
+            for (const item of itens) {
+                const temId = item?.ins_id !== undefined && item?.ins_id !== null && item?.ins_id !== '';
+                const nome = typeof item?.ins_nome === 'string' ? item.ins_nome.trim() : '';
+                const consulta = trx('insumo').where('pos_id', pos_id);
+                if (temId) consulta.where('ins_id', Number(item.ins_id));
+                else consulta.whereRaw('LOWER(TRIM(ins_nome)) = LOWER(?)', [nome]).orderBy('ins_id');
+                const insumo = await consulta.first('ins_id', 'ins_nome', 'ins_quantidade');
+
+                if (!insumo) {
+                    return falhar(400, `${nome ? `"${nome}"` : 'Este insumo'} não está cadastrado no estoque de ${postoExiste.pos_nome}. Cadastre o insumo antes de agendar.`);
+                }
+
+                // o mesmo insumo em duas linhas vira uma só, com a soma
+                const anterior = porInsumo.get(insumo.ins_id);
+                porInsumo.set(insumo.ins_id, {
+                    ...insumo,
+                    quantidade: (anterior?.quantidade ?? 0) + Number(item.quantidade),
+                });
+            }
+
+            // ESTOQUE RESERVADO: o que já está prometido em outras coletas
+            // agendadas não está livre. Faltando, o admin precisa confirmar
+            // (confirmar_sem_estoque), porque o insumo pode chegar até a data.
+            const reserva = await reservados([...porInsumo.keys()], { db: trx });
+            const faltando = [...porInsumo.values()]
+                .map((i) => ({
+                    ins_id: i.ins_id,
+                    ins_nome: i.ins_nome,
+                    pedido: i.quantidade,
+                    disponivel: Math.max(0, Number(i.ins_quantidade) - (reserva.get(Number(i.ins_id)) ?? 0)),
+                }))
+                .filter((i) => i.pedido > i.disponivel);
+
+            if (faltando.length && req.body?.confirmar_sem_estoque !== true) {
+                await trx.rollback();
+                return res.status(409).send({
+                    codigo: 'ESTOQUE_INSUFICIENTE',
+                    message: 'Estoque disponível insuficiente: ' +
+                        faltando.map((i) => `${i.ins_nome} (pedido ${i.pedido}, disponível ${i.disponivel})`).join(', ') +
+                        '. Confirme para agendar mesmo assim.',
+                    itens: faltando,
+                });
             }
 
             // CRIAR SOLICITAÇÃO
@@ -365,6 +464,8 @@ export default {
                     sol_status: 'agendado',
                     sol_insumo_quant: 0,
                     sol_origem_id: origemId,
+                    sol_ciclo: ciclo,
+                    sol_turno: vaga.turno,
                     sol_codigo_qr: randomUUID()
                 })
                 .returning('sol_id');
@@ -382,36 +483,10 @@ export default {
                 .where('sol_id', sol_id)
                 .update({ sol_protocolo: protocolo });
 
-            // CRIAR ITENS DA COLETA
-            // O admin digita o nome do produto (não escolhe um já
-            // cadastrado). Por isso, pra cada item: se já existir um
-            // insumo com esse nome (ignorando maiúsculas/minúsculas),
-            // reaproveita o ins_id dele; senão, cria um insumo novo.
+            // CRIAR ITENS DA COLETA (insumos já conferidos acima)
 
-            const linhasColeta = [];
-
-            for (const item of itens) {
-                const nome = String(item.ins_nome).trim();
-
-                let insumoExistente = await trx('insumo')
-                    .whereRaw('LOWER(ins_nome) = LOWER(?)', [nome])
-                    .first();
-
-                let ins_id;
-
-                if (insumoExistente) {
-                    ins_id = insumoExistente.ins_id;
-                } else {
-                    const novoInsumo = await trx('insumo')
-                        .insert({ ins_nome: nome, ins_quantidade: 0 })
-                        .returning('ins_id');
-
-                    ins_id =
-                        typeof novoInsumo[0] === 'object' ? novoInsumo[0].ins_id : novoInsumo[0];
-                }
-
-                linhasColeta.push({ sol_id, ins_id, quantidade: Number(item.quantidade) });
-            }
+            const linhasColeta = [...porInsumo.values()]
+                .map((i) => ({ sol_id, ins_id: i.ins_id, quantidade: i.quantidade }));
 
             await trx('coleta').insert(linhasColeta);
 
@@ -422,13 +497,15 @@ export default {
             const cancelado = origemId
                 ? await trx('solicitacao')
                     .where('sol_origem_id', origemId)
+                    .where('sol_ciclo', ciclo)
                     .whereIn('sol_status', STATUS_AGENDAMENTO_SEM_ENTREGA)
                     .orderBy('sol_id', 'desc')
                     .first('sol_protocolo', 'sol_id')
                 : null;
             const acao = cancelado ? ACOES.REAGENDADA : ACOES.AGENDADA;
             const detalheAgendamento =
-                `${protocolo} · coleta em ${sol_data_de_coleta.split('-').reverse().join('/')} · ${postoExiste.pos_nome}` +
+                `${protocolo} · coleta em ${sol_data_de_coleta.split('-').reverse().join('/')} (${ROTULO_TURNO[vaga.turno]}) · ${postoExiste.pos_nome}` +
+                (ciclo > 1 ? ` · ${ciclo}ª retirada` : '') +
                 (cancelado ? ` · substitui o agendamento cancelado ${cancelado.sol_protocolo ?? cancelado.sol_id}` : '');
             await registrarHistorico(trx, req.session, {
                 sol_id, acao, para: 'agendado', detalhe: detalheAgendamento,
@@ -446,7 +523,9 @@ export default {
             return res.status(201).send({
                 message: 'Agendamento criado com sucesso',
                 sol_id,
-                sol_protocolo: protocolo
+                sol_protocolo: protocolo,
+                sol_ciclo: ciclo,
+                sol_turno: vaga.turno
             });
 
         } catch (error) {
@@ -489,7 +568,7 @@ export default {
                 .where('sol_id', id)
                 .whereIn('sol_status', STATUS_AGENDAMENTO)
                 .forUpdate()
-                .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_origem_id');
+                .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_origem_id', 'pac_id');
 
             if (solicitacao?.sol_status === 'nao_compareceu') {
                 return falhar(409, { message: 'Este agendamento foi registrado como "não compareceu". Crie um novo agendamento.' });
@@ -512,6 +591,20 @@ export default {
                 const origem = await trx('solicitacao').where('sol_id', solicitacao.sol_origem_id).first('sol_data_vencimento');
                 if (prescricaoVencida(origem?.sol_data_vencimento, dataHojeBrasil())) {
                     return falhar(409, { message: `A prescrição deste agendamento venceu em ${dataBR(origem.sol_data_vencimento)}. Não é possível concluir a coleta.` });
+                }
+            }
+
+            // quem está retirando: o próprio paciente (vazio) ou uma pessoa
+            // autorizada na ficha dele
+            let retirada = null;
+            const retiradoPor = req.body?.retirado_por;
+            if (retiradoPor !== undefined && retiradoPor !== null && retiradoPor !== '') {
+                if (!idValido(retiradoPor)) return falhar(400, { message: 'Pessoa autorizada inválida.' });
+                retirada = await trx('paciente_autorizado')
+                    .where({ pau_id: Number(retiradoPor), pac_id: solicitacao.pac_id, pau_ativo: true })
+                    .first('pau_id', 'pau_nome', 'pau_parentesco');
+                if (!retirada) {
+                    return falhar(400, { message: 'Esta pessoa não está autorizada a retirar por este paciente.' });
                 }
             }
 
@@ -558,10 +651,17 @@ export default {
 
             await trx('solicitacao')
                 .where('sol_id', id)
-                .update({ sol_status: 'concluido' });
+                .update({
+                    sol_status: 'concluido',
+                    sol_retirado_por: retirada?.pau_id ?? null,
+                    sol_retirado_por_nome: retirada?.pau_nome ?? null,
+                });
 
             const entregues = itensColeta.map((i) => `${i.quantidade}x ${nomesInsumo.get(i.ins_id) ?? 'insumo ' + i.ins_id}`).join(', ');
-            const detalheColeta = `${solicitacao.sol_protocolo ?? 'Agendamento ' + id} · ${entregues}`;
+            const quem = retirada
+                ? ` · Retirado por ${retirada.pau_nome}${retirada.pau_parentesco ? ` (${retirada.pau_parentesco})` : ''}`
+                : '';
+            const detalheColeta = `${solicitacao.sol_protocolo ?? 'Agendamento ' + id} · ${entregues}${quem}`;
             await registrarHistorico(trx, req.session, {
                 sol_id: Number(id), acao: ACOES.CONCLUIDA, de: 'agendado', para: 'concluido', detalhe: detalheColeta,
             });
@@ -727,7 +827,7 @@ export default {
     async remarcar(req, res) {
         try {
             const { id } = req.params;
-            const { sol_data_de_coleta: novaData, motivo } = req.body ?? {};
+            const { sol_data_de_coleta: novaData, motivo, sol_turno: turnoPedido } = req.body ?? {};
 
             if (!novaData || validarDataISO(novaData)) {
                 return res.status(400).send({ message: 'Informe uma data válida para a coleta' });
@@ -748,7 +848,7 @@ export default {
                     .where('sol_id', id)
                     .whereIn('sol_status', STATUS_AGENDAMENTO)
                     .forUpdate()
-                    .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_data_de_coleta', 'sol_origem_id');
+                    .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_data_de_coleta', 'sol_origem_id', 'sol_turno', 'pos_id');
 
                 if (!ag) return { status: 404, corpo: { message: 'Agendamento não encontrado' } };
                 if (ag.sol_status !== 'agendado') {
@@ -756,9 +856,14 @@ export default {
                 }
 
                 const dataAtual = isoData(ag.sol_data_de_coleta);
-                if (dataAtual === novaData) {
-                    return { status: 400, corpo: { message: 'Escolha uma data diferente da atual' } };
+                const turnoAtual = ag.sol_turno ?? null;
+                if (dataAtual === novaData && (!turnoPedido || turnoPedido === turnoAtual)) {
+                    return { status: 400, corpo: { message: 'Escolha uma data ou um turno diferente do atual' } };
                 }
+
+                // o próprio agendamento não ocupa a vaga que está deixando
+                const vaga = await conferirVaga(ag.pos_id, novaData, turnoPedido, { db: trx, ignorarSolId: Number(id) });
+                if (vaga.erro) return { status: 409, corpo: { message: vaga.erro } };
 
                 if (ag.sol_origem_id) {
                     const origem = await trx('solicitacao').where('sol_id', ag.sol_origem_id).first('sol_data_vencimento');
@@ -770,10 +875,15 @@ export default {
 
                 const n = await trx('solicitacao')
                     .where({ sol_id: id, sol_status: 'agendado' })
-                    .update({ sol_data_de_coleta: novaData, sol_data_anterior: dataAtual });
+                    .update({
+                        sol_data_de_coleta: novaData, sol_turno: vaga.turno, sol_data_anterior: dataAtual,
+                        // a confirmação de presença era da data antiga
+                        sol_presenca: null, sol_presenca_em: null,
+                    });
                 if (!n) return { status: 409, corpo: { message: 'Só é possível remarcar agendamentos ainda não realizados.' } };
 
-                const detalhe = `${ag.sol_protocolo ?? 'Agendamento ' + id} · de ${dataBR(dataAtual)} para ${dataBR(novaData)}` +
+                const comTurno = (data, turno) => `${dataBR(data)}${turno ? ` (${ROTULO_TURNO[turno]})` : ''}`;
+                const detalhe = `${ag.sol_protocolo ?? 'Agendamento ' + id} · de ${comTurno(dataAtual, turnoAtual)} para ${comTurno(novaData, vaga.turno)}` +
                     (motivoLimpo ? ` · Motivo: ${motivoLimpo}` : '');
                 await registrarHistorico(trx, req.session, {
                     sol_id: Number(id), acao: ACOES.REMARCADA, de: 'agendado', para: 'agendado', detalhe,
@@ -786,7 +896,7 @@ export default {
 
                 return {
                     status: 200,
-                    corpo: { message: 'Agendamento remarcado', sol_id: Number(id), sol_data_de_coleta: novaData, sol_data_anterior: dataAtual },
+                    corpo: { message: 'Agendamento remarcado', sol_id: Number(id), sol_data_de_coleta: novaData, sol_turno: vaga.turno, sol_data_anterior: dataAtual },
                 };
             });
 
@@ -858,8 +968,8 @@ export default {
                 .whereIn('sol.sol_status', STATUS_AGENDAMENTO)
                 .select(
                     'sol.sol_id', 'sol.sol_protocolo', 'sol.sol_data_de_coleta', 'sol.sol_status',
-                    'sol.sol_motivo_cancelamento',
-                    'pac.pac_nome', 'pac.pac_cpf', 'pos.pos_nome',
+                    'sol.sol_motivo_cancelamento', 'sol.sol_retirado_por_nome',
+                    'pac.pac_id', 'pac.pac_nome', 'pac.pac_cpf', 'pos.pos_nome',
                     'ins.ins_id', 'ins.ins_nome', 'ins.ins_quantidade', 'col.quantidade',
                     'ori.sol_data_vencimento'
                 );
@@ -869,7 +979,16 @@ export default {
             }
 
             const [ag] = linhas;
+            // quem pode retirar no lugar do paciente (para conferir o documento no balcão)
+            const autorizados = (await autorizadosDoPaciente(ag.pac_id)).map((a) => ({
+                pau_id: a.pau_id,
+                pau_nome: a.pau_nome,
+                pau_cpf_parcial: cpfParcial(a.pau_cpf),
+                pau_parentesco: a.pau_parentesco ?? null,
+            }));
             return res.status(200).send({
+                autorizados,
+                sol_retirado_por_nome: ag.sol_retirado_por_nome ?? null,
                 sol_id: ag.sol_id,
                 sol_protocolo: ag.sol_protocolo,
                 sol_data_de_coleta: isoData(ag.sol_data_de_coleta),

@@ -27,6 +27,7 @@ db.public.registerFunction({ name: 'replace', args: ['text', 'text', 'text'], re
 // REGEXP_REPLACE(texto, padrão, troca, 'g') usado na matrícula
 db.public.registerFunction({ name: 'regexp_replace', args: ['text', 'text', 'text', 'text'], returns: 'text', implementation: (a, b, c, f) => a == null ? null : a.replace(new RegExp(b, f), c) });
 // gen_random_uuid() é nativo no Postgres 13+ (Neon)
+db.public.registerFunction({ name: 'trim', args: ['text'], returns: 'text', implementation: (a) => (a == null ? null : a.trim()) });
 db.public.registerFunction({ name: 'gen_random_uuid', returns: 'uuid', implementation: () => randomUUID(), impure: true });
 db.public.none(`
   create table postosdesaude (pos_id serial primary key, pos_nome text, pos_endereco text, pos_latitude float, pos_longitude float);
@@ -62,6 +63,26 @@ db.public.none(
 const migracao4 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-24_qrcode_agendamento.sql'), 'utf8');
 db.public.none(
   migracao4.slice(migracao4.indexOf('-- @pgmem-inicio'), migracao4.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+// migração de 25/10 (equipe por convite e estoque reservado): só o trecho marcado
+const migracao5 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-25_equipe_e_estoque.sql'), 'utf8');
+db.public.none(
+  migracao5.slice(migracao5.indexOf('-- @pgmem-inicio'), migracao5.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+// migração de 26/10 (etapa 2: itens da prescrição e retirada recorrente)
+const migracao6 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-26_itens_e_recorrencia.sql'), 'utf8');
+db.public.none(
+  migracao6.slice(migracao6.indexOf('-- @pgmem-inicio'), migracao6.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+// migração de 27/10 (etapa 3: agenda com turnos, outra data, presença, prioridade)
+const migracao7 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-27_agenda.sql'), 'utf8');
+db.public.none(
+  migracao7.slice(migracao7.indexOf('-- @pgmem-inicio'), migracao7.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
+// migração de 28/10 (etapa 4: pessoas autorizadas e quem retirou)
+const migracao8 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-28_autorizados_e_retirada.sql'), 'utf8');
+db.public.none(
+  migracao8.slice(migracao8.indexOf('-- @pgmem-inicio'), migracao8.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
 
 const knex = db.adapters.createKnex();
@@ -105,6 +126,47 @@ for (const [pac, status, motivo, data] of [[ana.pac_id, 'agendado', null, amanha
   await knex('solicitacao').where('sol_id', id).update({ sol_protocolo: `AG${String(id).padStart(6, '0')}`, sol_codigo_qr: randomUUID() });
   await knex('coleta').insert({ sol_id: id, ins_id: fralda.ins_id, quantidade: 5 });
 }
+
+// etapa 3: a UBS Centro atende todos os dias (para testar em qualquer dia),
+// com vagas por turno; a UBS Vila Nova fica no horário padrão
+for (let dia = 0; dia <= 6; dia++) {
+  await knex('posto_horario').insert([
+    { pos_id: p1.pos_id, phr_dia_semana: dia, phr_turno: 'manha', phr_abre: '08:00', phr_fecha: '12:00', phr_vagas: 6 },
+    { pos_id: p1.pos_id, phr_dia_semana: dia, phr_turno: 'tarde', phr_abre: '13:00', phr_fecha: '17:00', phr_vagas: 4 },
+  ]);
+}
+// a Ana pediu outra data para o agendamento de amanhã; o Bruno declarou deficiência
+const [agAmanha] = await knex('solicitacao').where({ pac_id: ana.pac_id, sol_status: 'agendado', sol_data_de_coleta: amanha }).select('sol_id');
+await knex('solicitacao').where('sol_id', agAmanha.sol_id).update({
+  sol_turno: 'manha', sol_pedido_data: daqui10, sol_pedido_turno: 'tarde', sol_pedido_motivo: 'Tenho consulta no mesmo horário',
+  sol_pedido_situacao: 'pedido', sol_pedido_em: new Date(),
+});
+await knex('pacientes').where('pac_id', bruno.pac_id).update({ pac_pcd: true });
+
+// etapa 4: a filha da Ana pode retirar por ela; uma prescrição de uso
+// contínuo com um insumo em falta (curativo: 3 no estoque, pede 5)
+await knex('paciente_autorizado').insert({ pac_id: ana.pac_id, pau_nome: 'Juliana Souza', pau_cpf: '153.509.460-56', pau_parentesco: 'filha', pau_telefone: '(24) 98888-1111' });
+const continua = await sol({ pac_id: ana.pac_id, pos_id: p1.pos_id, sol_status: 'Autorizado', ins_id: fralda.ins_id, sol_insumo_quant: 20, sol_data_vencimento: new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10), sol_periodicidade_dias: 30 });
+await knex('solicitacao_item').insert([
+  { sol_id: continua, ins_id: fralda.ins_id, sit_quantidade: 20 },
+  { sol_id: continua, ins_id: curativo.ins_id, sit_quantidade: 5 },
+]);
+
+// etapa 5: retiradas avulsas dos últimos meses (média da previsão), um
+// paciente que avisou que não vai amanhã e o estoque da UBS Vila Nova
+const diasAtras = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+for (const [n, qtd] of [[12, 30], [35, 25], [61, 35], [80, 20]]) {
+  const id = await sol({ pac_id: bruno.pac_id, pos_id: p1.pos_id, sol_status: 'concluido', sol_data_de_coleta: diasAtras(n), sol_prescricao: null, sol_prescricao_tipo: null });
+  await knex('solicitacao').where('sol_id', id).update({ sol_protocolo: `AG${String(id).padStart(6, '0')}` });
+  await knex('coleta').insert({ sol_id: id, ins_id: fralda.ins_id, quantidade: qtd });
+}
+const naoVai = await sol({ pac_id: bruno.pac_id, pos_id: p1.pos_id, sol_status: 'agendado', sol_data_de_coleta: amanha, sol_turno: 'tarde', sol_presenca: 'nao_vou', sol_prescricao: null, sol_prescricao_tipo: null });
+await knex('solicitacao').where('sol_id', naoVai).update({ sol_protocolo: `AG${String(naoVai).padStart(6, '0')}`, sol_codigo_qr: randomUUID() });
+await knex('coleta').insert([{ sol_id: naoVai, ins_id: fralda.ins_id, quantidade: 10 }, { sol_id: naoVai, ins_id: curativo.ins_id, quantidade: 2 }]);
+await knex('insumo').insert([
+  { ins_nome: 'Fralda Geriátrica G', ins_quantidade: 180, ins_marca: 'Bigfral', pos_id: p2.pos_id },
+  { ins_nome: 'Luva de Procedimento M', ins_quantidade: 300, ins_marca: 'Descarpack', pos_id: p2.pos_id },
+]);
 
 await import(pathToFileURL(path.join(BACKEND, 'src/server.js')).href);
 console.log('Backend local de teste pronto (pg-mem) em http://localhost:3344');

@@ -12,6 +12,9 @@ export const STATUS_AGENDAMENTO_ATIVO = ['agendado', 'concluido'];
 // Agendamentos encerrados sem entrega (a prescrição pode ser agendada de novo)
 export const STATUS_AGENDAMENTO_SEM_ENTREGA = ['cancelado', 'nao_compareceu'];
 
+// Protocolo de atendimento a partir do sol_id, ex: sol_id 42 -> "AG000042"
+export const gerarProtocolo = (sol_id) => `AG${String(sol_id).padStart(6, '0')}`;
+
 // Data (DATE do Postgres, que chega como Date ou texto) -> "YYYY-MM-DD"
 export function isoData(valor) {
     if (!valor) return null;

@@ -1,11 +1,10 @@
 import knex from '../database/index.js';
-import bcrypt from 'bcrypt';
 import {
-  coletarErros, formatarCPF, formatarTelefone, normalizarEmail, normalizarNome, somenteDigitos,
-  validarConfirmacaoSenha, validarCPF, validarEmail, validarNome, validarSenha,
-  validarMotivo, validarTelefone, whereCpf, mensagemErroBanco, validarDataISO,
+  validarMotivo, mensagemErroBanco, validarDataISO,
 } from '../utils/validacoes.js';
-import { emailEmUso } from '../utils/contas.js';
+import { cadastrarComConvite } from '../utils/equipe.js';
+import { comItens } from '../utils/itensPrescricao.js';
+import { COLUNAS_PRIORIDADE, comPrioridade, ordemPrioridade } from '../utils/prioridade.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
 import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
 import { COLUNA_VERSOES, comVersaoAnterior, numerarVersoes, versoesJoin } from '../utils/versoes.js';
@@ -78,20 +77,25 @@ export default {
             "sol.sol_id", "sol.pac_id", "sol.pos_id", "sol.ins_id", "sol.sol_status",
             "sol.sol_data_solicitacao", "sol.sol_data_vencimento", "sol.sol_observacao",
             "sol.sol_prescricao_tipo", "sol.sol_insumo_quant", "sol.sol_observacao_equipe",
+            "sol.sol_periodicidade_dias",
             "pac.pac_nome", "pac.pac_cpf", "pac.pac_avatar",
+            ...COLUNAS_PRIORIDADE,
             "ins.ins_nome", "pos.pos_nome",
             // > 0 = o paciente reenviou uma versão corrigida antes da revisão
             COLUNA_VERSOES,
-        ).orderBy("sol.sol_data_solicitacao", "asc").orderBy("sol.sol_id", "asc");
+        )
+            // prioridade legal (80+, depois 60+/PcD/gestante) e a data de envio
+            .orderBy(ordemPrioridade(dataHojeBrasil()))
+            .orderBy("sol.sol_data_solicitacao", "asc").orderBy("sol.sol_id", "asc");
 
-        const numerar = numerarVersoes;
+        const numerar = (linhas) => comPrioridade(numerarVersoes(linhas), dataHojeBrasil());
 
         if (req.query.page !== undefined) {
             const pagina = await paginar(query, montar, req.query);
-            return res.status(200).json({ ...pagina, itens: numerar(pagina.itens) });
+            return res.status(200).json({ ...pagina, itens: await comItens(numerar(pagina.itens)) });
         }
 
-        return res.status(200).json(numerar(await query.modify(montar)));
+        return res.status(200).json(await comItens(numerar(await query.modify(montar))));
 
     } catch (error) {
         console.error("ERRO COMPLETO AO BUSCAR PRESCRIÇÕES:", error);
@@ -125,7 +129,8 @@ export default {
           .leftJoin("insumo as ins", "ins.ins_id", "sol.ins_id")
           .leftJoin(...versoesJoin("sol"))
           .select("sol.sol_id", "sol.sol_data_solicitacao", "sol.sol_insumo_quant", "pac.pac_nome", "ins.ins_nome",
-            COLUNA_VERSOES)
+            ...COLUNAS_PRIORIDADE, COLUNA_VERSOES)
+          .orderBy(ordemPrioridade(dataHojeBrasil()))
           .orderBy("sol.sol_data_solicitacao", "asc")
           .limit(5),
         minhasDecisoes()
@@ -139,7 +144,7 @@ export default {
         comNovaVersao,
         autorizadas30,
         naoAutorizadas30,
-        fila: numerarVersoes(fila),
+        fila: await comItens(comPrioridade(numerarVersoes(fila), dataHojeBrasil())),
         recentes: recentes.map((r) => ({ sol_id: r.sol_id, acao: r.his_acao, quando: r.his_criado_em })),
       });
     } catch (error) {
@@ -207,6 +212,8 @@ if (!/^\d+$/.test(id)) {
 
           // QUANTIDADE
           "sol.sol_insumo_quant",
+          // uso contínuo: uma retirada a cada N dias
+          "sol.sol_periodicidade_dias",
 
           // PACIENTE
           "pac.pac_nome",
@@ -249,7 +256,7 @@ if (!/^\d+$/.test(id)) {
 
 
       return res.status(200).json(
-        solicitacao
+        await comItens(solicitacao)
       );
 
 
@@ -483,59 +490,12 @@ return res.status(200).json({
   // CRIAR AUTORIZADOR
  
 
+  // Cadastro pelo link do convite gerado pelo admin universal.
   async createautorizador(req, res) {
-
     try {
-
-      const {
-        nome,
-        email,
-        telefone,
-        senha,
-        confirmacao_senha,
-        cpf
-      } = req.body ?? {};
-
-      const erros = coletarErros(
-        validarNome(nome),
-        validarEmail(email),
-        validarTelefone(telefone),
-        validarCPF(cpf),
-        validarSenha(senha),
-        validarConfirmacaoSenha(senha, confirmacao_senha),
-      );
-      if (erros.length) {
-        return res.status(400).json({ sucesso: false, erros });
-      }
-
-      const conflitos = [];
-      if (await emailEmUso(email)) conflitos.push('E-mail já cadastrado.');
-
-      const cpfExiste = await knex('autorizador')
-        .whereRaw(...whereCpf('aut_cpf'), [somenteDigitos(cpf)])
-        .first('aut_cpf');
-      if (cpfExiste) conflitos.push('CPF já cadastrado como autorizador.');
-
-      if (conflitos.length) {
-        return res.status(409).json({ sucesso: false, erros: conflitos });
-      }
-
-      const hashSenha = await bcrypt.hash(senha, 10);
-
-      await knex('autorizador').insert({
-        aut_nome: normalizarNome(nome),
-        aut_email: normalizarEmail(email),
-        aut_tel: formatarTelefone(telefone),
-        aut_senha: hashSenha,
-        aut_cpf: formatarCPF(cpf)
-      });
-
-      return res.status(201).send({
-        message: 'Autorizador criado com sucesso'
-      });
-
+      const { status, body } = await cadastrarComConvite('AUTORIZADOR', req.body ?? {});
+      return res.status(status).send(body);
     } catch (error) {
-
       console.error('Erro ao criar autorizador:', error);
       const doBanco = mensagemErroBanco(error);
       if (doBanco) return res.status(400).json({ sucesso: false, erros: [doBanco] });
@@ -543,9 +503,7 @@ return res.status(200).json({
       return res.status(500).send({
         erro: 'Erro ao criar autorizador. Tente novamente.'
       });
-
     }
-
   }
 
 };
