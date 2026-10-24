@@ -9,6 +9,7 @@ import { notificar } from '../notificacoes/processador.js';
 import { avisarEstoque } from '../notificacoes/estoque.js';
 import { reservados } from '../utils/estoque.js';
 import { conferirVaga, ROTULO_TURNO } from '../utils/agenda.js';
+import { autorizadosDoPaciente } from './autorizadosControllers.js';
 
 const TAMANHO_MAX_RECADO = 300;
 
@@ -43,6 +44,8 @@ function agruparPorAgendamento(resultado) {
                     : null,
                 // confirmação de presença: 'vou' | 'nao_vou' | null (sem resposta)
                 sol_presenca: linha.sol_presenca ?? null,
+                // quem retirou no lugar do paciente (vazio = o próprio paciente)
+                sol_retirado_por_nome: linha.sol_retirado_por_nome ?? null,
                 sol_recado: linha.sol_recado ?? null,
                 // data anterior quando o admin remarcou (aviso "remarcado")
                 sol_data_anterior: linha.sol_data_anterior ?? null,
@@ -97,6 +100,7 @@ const SELECT_AGENDAMENTO = [
     'sol.sol_pedido_motivo',
     'sol.sol_pedido_resposta',
     'sol.sol_presenca',
+    'sol.sol_retirado_por_nome',
     'sol.sol_recado',
     'sol.sol_data_anterior',
 
@@ -564,7 +568,7 @@ export default {
                 .where('sol_id', id)
                 .whereIn('sol_status', STATUS_AGENDAMENTO)
                 .forUpdate()
-                .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_origem_id');
+                .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_origem_id', 'pac_id');
 
             if (solicitacao?.sol_status === 'nao_compareceu') {
                 return falhar(409, { message: 'Este agendamento foi registrado como "não compareceu". Crie um novo agendamento.' });
@@ -587,6 +591,20 @@ export default {
                 const origem = await trx('solicitacao').where('sol_id', solicitacao.sol_origem_id).first('sol_data_vencimento');
                 if (prescricaoVencida(origem?.sol_data_vencimento, dataHojeBrasil())) {
                     return falhar(409, { message: `A prescrição deste agendamento venceu em ${dataBR(origem.sol_data_vencimento)}. Não é possível concluir a coleta.` });
+                }
+            }
+
+            // quem está retirando: o próprio paciente (vazio) ou uma pessoa
+            // autorizada na ficha dele
+            let retirada = null;
+            const retiradoPor = req.body?.retirado_por;
+            if (retiradoPor !== undefined && retiradoPor !== null && retiradoPor !== '') {
+                if (!idValido(retiradoPor)) return falhar(400, { message: 'Pessoa autorizada inválida.' });
+                retirada = await trx('paciente_autorizado')
+                    .where({ pau_id: Number(retiradoPor), pac_id: solicitacao.pac_id, pau_ativo: true })
+                    .first('pau_id', 'pau_nome', 'pau_parentesco');
+                if (!retirada) {
+                    return falhar(400, { message: 'Esta pessoa não está autorizada a retirar por este paciente.' });
                 }
             }
 
@@ -633,10 +651,17 @@ export default {
 
             await trx('solicitacao')
                 .where('sol_id', id)
-                .update({ sol_status: 'concluido' });
+                .update({
+                    sol_status: 'concluido',
+                    sol_retirado_por: retirada?.pau_id ?? null,
+                    sol_retirado_por_nome: retirada?.pau_nome ?? null,
+                });
 
             const entregues = itensColeta.map((i) => `${i.quantidade}x ${nomesInsumo.get(i.ins_id) ?? 'insumo ' + i.ins_id}`).join(', ');
-            const detalheColeta = `${solicitacao.sol_protocolo ?? 'Agendamento ' + id} · ${entregues}`;
+            const quem = retirada
+                ? ` · Retirado por ${retirada.pau_nome}${retirada.pau_parentesco ? ` (${retirada.pau_parentesco})` : ''}`
+                : '';
+            const detalheColeta = `${solicitacao.sol_protocolo ?? 'Agendamento ' + id} · ${entregues}${quem}`;
             await registrarHistorico(trx, req.session, {
                 sol_id: Number(id), acao: ACOES.CONCLUIDA, de: 'agendado', para: 'concluido', detalhe: detalheColeta,
             });
@@ -943,8 +968,8 @@ export default {
                 .whereIn('sol.sol_status', STATUS_AGENDAMENTO)
                 .select(
                     'sol.sol_id', 'sol.sol_protocolo', 'sol.sol_data_de_coleta', 'sol.sol_status',
-                    'sol.sol_motivo_cancelamento',
-                    'pac.pac_nome', 'pac.pac_cpf', 'pos.pos_nome',
+                    'sol.sol_motivo_cancelamento', 'sol.sol_retirado_por_nome',
+                    'pac.pac_id', 'pac.pac_nome', 'pac.pac_cpf', 'pos.pos_nome',
                     'ins.ins_id', 'ins.ins_nome', 'ins.ins_quantidade', 'col.quantidade',
                     'ori.sol_data_vencimento'
                 );
@@ -954,7 +979,16 @@ export default {
             }
 
             const [ag] = linhas;
+            // quem pode retirar no lugar do paciente (para conferir o documento no balcão)
+            const autorizados = (await autorizadosDoPaciente(ag.pac_id)).map((a) => ({
+                pau_id: a.pau_id,
+                pau_nome: a.pau_nome,
+                pau_cpf_parcial: cpfParcial(a.pau_cpf),
+                pau_parentesco: a.pau_parentesco ?? null,
+            }));
             return res.status(200).send({
+                autorizados,
+                sol_retirado_por_nome: ag.sol_retirado_por_nome ?? null,
                 sol_id: ag.sol_id,
                 sol_protocolo: ag.sol_protocolo,
                 sol_data_de_coleta: isoData(ag.sol_data_de_coleta),

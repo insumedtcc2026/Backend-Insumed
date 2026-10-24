@@ -79,6 +79,11 @@ const migracao7 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10
 db.public.none(
   migracao7.slice(migracao7.indexOf('-- @pgmem-inicio'), migracao7.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
+// migração de 28/10 (etapa 4: pessoas autorizadas e quem retirou)
+const migracao8 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-28_autorizados_e_retirada.sql'), 'utf8');
+db.public.none(
+  migracao8.slice(migracao8.indexOf('-- @pgmem-inicio'), migracao8.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
 
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
@@ -137,6 +142,15 @@ await knex('solicitacao').where('sol_id', agAmanha.sol_id).update({
   sol_pedido_situacao: 'pedido', sol_pedido_em: new Date(),
 });
 await knex('pacientes').where('pac_id', bruno.pac_id).update({ pac_pcd: true });
+
+// etapa 4: a filha da Ana pode retirar por ela; uma prescrição de uso
+// contínuo com um insumo em falta (curativo: 3 no estoque, pede 5)
+await knex('paciente_autorizado').insert({ pac_id: ana.pac_id, pau_nome: 'Juliana Souza', pau_cpf: '153.509.460-56', pau_parentesco: 'filha', pau_telefone: '(24) 98888-1111' });
+const continua = await sol({ pac_id: ana.pac_id, pos_id: p1.pos_id, sol_status: 'Autorizado', ins_id: fralda.ins_id, sol_insumo_quant: 20, sol_data_vencimento: new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10), sol_periodicidade_dias: 30 });
+await knex('solicitacao_item').insert([
+  { sol_id: continua, ins_id: fralda.ins_id, sit_quantidade: 20 },
+  { sol_id: continua, ins_id: curativo.ins_id, sit_quantidade: 5 },
+]);
 
 await import(pathToFileURL(path.join(BACKEND, 'src/server.js')).href);
 console.log('Backend local de teste pronto (pg-mem) em http://localhost:3344');

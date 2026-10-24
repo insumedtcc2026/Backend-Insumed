@@ -87,6 +87,11 @@ const migracao7 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10
 db.public.none(
   migracao7.slice(migracao7.indexOf('-- @pgmem-inicio'), migracao7.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
+// migração de 28/10 (etapa 4: pessoas autorizadas e quem retirou)
+const migracao8 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-28_autorizados_e_retirada.sql'), 'utf8');
+db.public.none(
+  migracao8.slice(migracao8.indexOf('-- @pgmem-inicio'), migracao8.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
 
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
@@ -1906,4 +1911,117 @@ test('T6 prioridade legal: 80+ primeiro, depois 60+/PcD conferida, depois os dem
   await request(app).patch('/pacientes/minha-prioridade').set(auth(tkPcd)).send({ pcd: true, gestante: true }).expect(200);
   assert.equal((await knex('pacientes').where('pac_id', pcd).first()).pac_prioridade_conferida, null);
   assert.equal((await request(app).patch('/pacientes/minha-prioridade').set(auth(tkPcd)).send({ pcd: 'sim' })).status, 400);
+});
+
+// ------------------------------------------------------------------
+// Etapa 4 — Pessoas autorizadas, quem retirou e "Meus insumos"
+// ------------------------------------------------------------------
+
+test('U1 pessoas autorizadas: só a unidade do paciente cadastra, valida, limita e desativa', async () => {
+  // paciente atendido só no posto 2: o admin do posto 1 não edita
+  const [norte] = await knex('pacientes').insert({ pac_nome: 'Carlos Norte', pac_cpf: '935.411.347-80' }).returning('pac_id');
+  ids.pacNorte = norte.pac_id;
+  await knex('solicitacao').insert({ pac_id: ids.pacNorte, pos_id: ids.posto2, sol_status: 'Pendente' });
+  const pessoa = { nome: 'Maria Lima', cpf: '390.533.447-05', parentesco: 'filha', telefone: '(24) 99999-1234' };
+  const semVinculo = await request(app).post(`/pacientes/${ids.pacNorte}/autorizados`).set(auth(tk.adm)).send(pessoa);
+  assert.equal(semVinculo.status, 403);
+  assert.equal((await request(app).post(`/pacientes/${ids.pacNorte}/autorizados`).set(auth(tk.admNorte)).send(pessoa)).status, 201);
+  const lista0 = await request(app).get(`/pacientes/${ids.pacNorte}/autorizados`).set(auth(tk.adm));
+  assert.equal(lista0.body.pode_editar, false);
+
+  const url = `/pacientes/${ids.pacA}/autorizados`;
+  const invalidos = [
+    [{ ...pessoa, nome: 'Maria' }, /sobrenome/],
+    [{ ...pessoa, cpf: '111.111.111-11' }, /CPF inválido/],
+    [{ ...pessoa, cpf: '529.982.247-25' }, /próprio paciente/],
+    [{ ...pessoa, telefone: '123' }, /Telefone/],
+  ];
+  for (const [corpo, msg] of invalidos) {
+    const r = await request(app).post(url).set(auth(tk.adm)).send(corpo);
+    assert.equal(r.status, 400, JSON.stringify(corpo));
+    assert.match(r.body.error, msg);
+  }
+  const ok = await request(app).post(url).set(auth(tk.adm)).send({ ...pessoa, cpf: '39053344705' });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  assert.equal(ok.body.pau_cpf, '390.533.447-05');
+  ids.pau = ok.body.pau_id;
+  assert.equal((await request(app).post(url).set(auth(tk.adm)).send(pessoa)).status, 409);
+
+  const editar = await request(app).put(`${url}/${ids.pau}`).set(auth(tk.adm)).send({ ...pessoa, parentesco: 'cuidadora' });
+  assert.equal(editar.status, 200);
+  assert.equal(editar.body.pau_parentesco, 'cuidadora');
+
+  // paciente vê os próprios; não acessa a rota da unidade
+  const meus = await request(app).get('/meus-autorizados').set(auth(tk.pacA));
+  assert.deepEqual(meus.body.map((a) => a.pau_nome), ['Maria Lima']);
+  assert.equal((await request(app).get('/meus-autorizados').set(auth(tk.pacB))).body.length, 0);
+  assert.equal((await request(app).post(url).set(auth(tk.pacA)).send(pessoa)).status, 403);
+
+  // limite de 5 ativas
+  const cpfs = ['153.509.460-56', '111.444.777-35', '935.411.347-80', '714.602.380-01'];
+  for (const cpf of cpfs) await request(app).post(url).set(auth(tk.adm)).send({ ...pessoa, nome: 'Outra Pessoa', cpf }).expect(201);
+  const sexto = await request(app).post(url).set(auth(tk.adm)).send({ ...pessoa, nome: 'Sexta Pessoa', cpf: '248.438.034-80' });
+  assert.equal(sexto.status, 409);
+  const ultimo = (await request(app).get(url).set(auth(tk.adm))).body.autorizados.at(-1);
+  assert.equal((await request(app).delete(`${url}/${ultimo.pau_id}`).set(auth(tk.adm))).status, 200);
+  assert.equal((await request(app).delete(`${url}/${ultimo.pau_id}`).set(auth(tk.adm))).status, 404);
+  assert.equal((await request(app).get(url).set(auth(tk.adm))).body.autorizados.length, 4);
+  // o universal edita qualquer paciente
+  assert.equal((await request(app).get(`/pacientes/${ids.pacNorte}/autorizados`).set(auth(tk.admMesmoId))).body.pode_editar, true);
+});
+
+test('U2 retirada por pessoa autorizada: aparece no atendimento, fica registrada e no histórico', async () => {
+  const ag = await request(app).post('/agendamentos').set(auth(tk.adm))
+    .send(novoAg({ sol_origem_id: undefined, itens: [{ ins_id: ids.bolsa, quantidade: 1 }] }));
+  assert.equal(ag.status, 201, JSON.stringify(ag.body));
+  const atend = await request(app).get(`/agendamentos/${ag.body.sol_id}/atendimento`).set(auth(tk.adm));
+  assert.ok(atend.body.autorizados.some((a) => a.pau_id === ids.pau && a.pau_cpf_parcial === '390.***.***-05'));
+
+  // pessoa de outro paciente é recusada
+  const [outra] = await knex('paciente_autorizado').insert({ pac_id: ids.pacB, pau_nome: 'Fulano Tal', pau_cpf: '153.509.460-56' }).returning('pau_id');
+  const errado = await request(app).patch(`/agendamentos/${ag.body.sol_id}/concluir`).set(auth(tk.adm)).send({ retirado_por: outra.pau_id });
+  assert.equal(errado.status, 400);
+  assert.equal((await knex('solicitacao').where('sol_id', ag.body.sol_id).first()).sol_status, 'agendado');
+
+  const ok = await request(app).patch(`/agendamentos/${ag.body.sol_id}/concluir`).set(auth(tk.adm)).send({ retirado_por: ids.pau });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const linha = await knex('solicitacao').where('sol_id', ag.body.sol_id).first();
+  assert.equal(linha.sol_retirado_por, ids.pau);
+  assert.equal(linha.sol_retirado_por_nome, 'Maria Lima');
+  const hist = await knex('historico_solicitacao').where({ sol_id: ag.body.sol_id, his_acao: 'concluida' }).first();
+  assert.match(hist?.his_detalhe ?? '', /Retirado por Maria Lima \(cuidadora\)/);
+  const lista = await request(app).get('/meus-agendamentos').query({ sol_id: ag.body.sol_id }).set(auth(tk.pacA));
+  assert.equal(lista.body.itens[0].sol_retirado_por_nome, 'Maria Lima');
+});
+
+test('U3 meus insumos: só prescrições autorizadas e válidas, com "indisponível" quando falta', async () => {
+  const [pouco] = await knex('insumo').insert({ ins_nome: 'Gaze estéril', ins_quantidade: 3, pos_id: ids.posto1 }).returning('ins_id');
+  const sol = await novaPrescricao();
+  await request(app).patch(`/solicitacao/${sol}`).set(auth(tk.adm)).send({
+    sol_status: 'Revisado', sol_data_vencimento: somar(hoje, 60), sol_periodicidade_dias: 30,
+    itens: [{ ins_id: ids.bolsa, quantidade: 2 }, { ins_id: pouco.ins_id, quantidade: 5 }],
+  }).expect(200);
+  // ainda não autorizada: não aparece
+  assert.ok(!(await request(app).get('/meus-insumos').set(auth(tk.pacA))).body.some((p) => p.sol_id === sol));
+  await request(app).patch(`/autorizador/solicitacao/${sol}`).set(auth(tk.aut)).send({ sol_status: 'Autorizado' }).expect(200);
+
+  const r = await request(app).get('/meus-insumos').set(auth(tk.pacA));
+  assert.equal(r.status, 200);
+  const p = r.body.find((x) => x.sol_id === sol);
+  assert.equal(p.sol_periodicidade_dias, 30);
+  assert.deepEqual(p.itens.map((i) => [i.ins_nome, i.situacao]), [['Bolsa de colostomia', 'disponivel'], ['Gaze estéril', 'indisponivel']]);
+  assert.equal(p.itens[0].ins_quantidade, undefined, 'o paciente não vê o número do estoque');
+
+  // a reserva do próprio agendamento não deixa o insumo "indisponível" para ele
+  await knex('insumo').where('ins_id', pouco.ins_id).update({ ins_quantidade: 5 });
+  await request(app).post('/agendamentos').set(auth(tk.adm))
+    .send(novoAg({ sol_origem_id: sol, itens: [{ ins_id: pouco.ins_id, quantidade: 5 }] })).expect(201);
+  const depois = (await request(app).get('/meus-insumos').set(auth(tk.pacA))).body.find((x) => x.sol_id === sol);
+  assert.equal(depois.itens.find((i) => i.ins_id === pouco.ins_id).situacao, 'disponivel');
+  assert.ok(depois.agendamento?.sol_id);
+
+  // vencida some; outro paciente não vê
+  await knex('solicitacao').where('sol_id', sol).update({ sol_data_vencimento: ontem });
+  assert.ok(!(await request(app).get('/meus-insumos').set(auth(tk.pacA))).body.some((x) => x.sol_id === sol));
+  assert.equal((await request(app).get('/meus-insumos').set(auth(tk.adm))).status, 403);
 });

@@ -23,6 +23,8 @@ import equipeControllers from "./controllers/equipeControllers.js";
 import autorizarUniversal from "./middleware/autorizarUniversal.js";
 import agendaControllers from "./controllers/agendaControllers.js";
 import participacaoControllers from "./controllers/participacaoControllers.js";
+import autorizadosControllers from "./controllers/autorizadosControllers.js";
+import meusInsumosControllers from "./controllers/meusInsumosControllers.js";
 
 
 const routes = express.Router();
@@ -53,6 +55,14 @@ routes.get('/pacientes/:id/resumo', authorization, autorizarAdmin, pacientesCont
 // prioridade legal: o paciente declara, a unidade confere
 routes.patch('/pacientes/minha-prioridade', authorization, autorizarPaciente, pacientesControllers.minhaPrioridade);
 routes.patch('/pacientes/:id/prioridade', authorization, autorizarAdmin, pacientesControllers.conferirPrioridade);
+// pessoas autorizadas a retirar no lugar do paciente (a unidade cadastra; o paciente consulta)
+routes.get('/pacientes/:id/autorizados', authorization, autorizarAdmin, autorizadosControllers.listar);
+routes.post('/pacientes/:id/autorizados', authorization, autorizarAdmin, autorizadosControllers.criar);
+routes.put('/pacientes/:id/autorizados/:pau', authorization, autorizarAdmin, autorizadosControllers.atualizar);
+routes.delete('/pacientes/:id/autorizados/:pau', authorization, autorizarAdmin, autorizadosControllers.remover);
+routes.get('/meus-autorizados', authorization, autorizarPaciente, autorizadosControllers.meus);
+// insumos em uso do paciente, com "Indisponível" quando faltar na unidade
+routes.get('/meus-insumos', authorization, autorizarPaciente, meusInsumosControllers.listar);
 
 // Perfil pessoal do admin e do autorizador
 const autorizarAdminOuAut = (req, res, next) =>
