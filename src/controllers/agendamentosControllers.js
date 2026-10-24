@@ -8,6 +8,7 @@ import { idDoAdmin } from '../utils/contas.js';
 import { notificar } from '../notificacoes/processador.js';
 import { avisarEstoque } from '../notificacoes/estoque.js';
 import { reservados } from '../utils/estoque.js';
+import { conferirVaga, ROTULO_TURNO } from '../utils/agenda.js';
 
 const TAMANHO_MAX_RECADO = 300;
 
@@ -29,6 +30,19 @@ function agruparPorAgendamento(resultado) {
                 sol_origem_id: linha.sol_origem_id ?? null,
                 // retirada recorrente: 1 = primeira, 2 = segunda...
                 sol_ciclo: Number(linha.sol_ciclo ?? 1),
+                sol_turno: linha.sol_turno ?? null,
+                // pedido de outra data feito pelo paciente (pedido | aceito | recusado)
+                pedido_outra_data: linha.sol_pedido_situacao
+                    ? {
+                        situacao: linha.sol_pedido_situacao,
+                        data: linha.sol_pedido_data ?? null,
+                        turno: linha.sol_pedido_turno ?? null,
+                        motivo: linha.sol_pedido_motivo ?? null,
+                        resposta: linha.sol_pedido_resposta ?? null,
+                    }
+                    : null,
+                // confirmação de presença: 'vou' | 'nao_vou' | null (sem resposta)
+                sol_presenca: linha.sol_presenca ?? null,
                 sol_recado: linha.sol_recado ?? null,
                 // data anterior quando o admin remarcou (aviso "remarcado")
                 sol_data_anterior: linha.sol_data_anterior ?? null,
@@ -76,6 +90,13 @@ const SELECT_AGENDAMENTO = [
     'sol.sol_data_cancelamento',
     'sol.sol_origem_id',
     'sol.sol_ciclo',
+    'sol.sol_turno',
+    'sol.sol_pedido_situacao',
+    'sol.sol_pedido_data',
+    'sol.sol_pedido_turno',
+    'sol.sol_pedido_motivo',
+    'sol.sol_pedido_resposta',
+    'sol.sol_presenca',
     'sol.sol_recado',
     'sol.sol_data_anterior',
 
@@ -180,6 +201,11 @@ export default {
 
                 if (status && status !== 'todos') qb.where('sol.sol_status', status);
 
+                // aba "Pedidos de outra data": só os que esperam resposta
+                if (req.query.pedido === 'pendente') {
+                    qb.where('sol.sol_status', 'agendado').where('sol.sol_pedido_situacao', 'pedido');
+                }
+
                 if (busca && busca.trim()) {
                     const termo = busca.trim();
                     const termoCpf = termo.replace(/\D/g, '');
@@ -241,7 +267,7 @@ export default {
 
         try {
 
-            const { paciente, sol_data_de_coleta, posto, itens, sol_origem_id } = req.body ?? {};
+            const { paciente, sol_data_de_coleta, posto, itens, sol_origem_id, sol_turno } = req.body ?? {};
 
             // VALIDAÇÕES
 
@@ -369,6 +395,13 @@ export default {
                 ciclo = ativos.reduce((maior, a) => Math.max(maior, Number(a.sol_ciclo) || 1), 0) + 1;
             }
 
+            // DIA E TURNO: dentro do horário da unidade e com vaga. Sem turno
+            // (clientes antigos), fica o primeiro turno do dia com vaga.
+            const vaga = await conferirVaga(pos_id, sol_data_de_coleta, sol_turno, { db: trx });
+            if (vaga.erro) {
+                return falhar(409, vaga.erro);
+            }
+
             // INSUMOS DO ESTOQUE DA UNIDADE
             // O insumo tem de ser da unidade do agendamento: assim a baixa na
             // conclusão sai do estoque certo. Nada é criado por aqui.
@@ -428,6 +461,7 @@ export default {
                     sol_insumo_quant: 0,
                     sol_origem_id: origemId,
                     sol_ciclo: ciclo,
+                    sol_turno: vaga.turno,
                     sol_codigo_qr: randomUUID()
                 })
                 .returning('sol_id');
@@ -466,7 +500,7 @@ export default {
                 : null;
             const acao = cancelado ? ACOES.REAGENDADA : ACOES.AGENDADA;
             const detalheAgendamento =
-                `${protocolo} · coleta em ${sol_data_de_coleta.split('-').reverse().join('/')} · ${postoExiste.pos_nome}` +
+                `${protocolo} · coleta em ${sol_data_de_coleta.split('-').reverse().join('/')} (${ROTULO_TURNO[vaga.turno]}) · ${postoExiste.pos_nome}` +
                 (ciclo > 1 ? ` · ${ciclo}ª retirada` : '') +
                 (cancelado ? ` · substitui o agendamento cancelado ${cancelado.sol_protocolo ?? cancelado.sol_id}` : '');
             await registrarHistorico(trx, req.session, {
@@ -486,7 +520,8 @@ export default {
                 message: 'Agendamento criado com sucesso',
                 sol_id,
                 sol_protocolo: protocolo,
-                sol_ciclo: ciclo
+                sol_ciclo: ciclo,
+                sol_turno: vaga.turno
             });
 
         } catch (error) {
@@ -767,7 +802,7 @@ export default {
     async remarcar(req, res) {
         try {
             const { id } = req.params;
-            const { sol_data_de_coleta: novaData, motivo } = req.body ?? {};
+            const { sol_data_de_coleta: novaData, motivo, sol_turno: turnoPedido } = req.body ?? {};
 
             if (!novaData || validarDataISO(novaData)) {
                 return res.status(400).send({ message: 'Informe uma data válida para a coleta' });
@@ -788,7 +823,7 @@ export default {
                     .where('sol_id', id)
                     .whereIn('sol_status', STATUS_AGENDAMENTO)
                     .forUpdate()
-                    .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_data_de_coleta', 'sol_origem_id');
+                    .first('sol_id', 'sol_status', 'sol_protocolo', 'sol_data_de_coleta', 'sol_origem_id', 'sol_turno', 'pos_id');
 
                 if (!ag) return { status: 404, corpo: { message: 'Agendamento não encontrado' } };
                 if (ag.sol_status !== 'agendado') {
@@ -796,9 +831,14 @@ export default {
                 }
 
                 const dataAtual = isoData(ag.sol_data_de_coleta);
-                if (dataAtual === novaData) {
-                    return { status: 400, corpo: { message: 'Escolha uma data diferente da atual' } };
+                const turnoAtual = ag.sol_turno ?? null;
+                if (dataAtual === novaData && (!turnoPedido || turnoPedido === turnoAtual)) {
+                    return { status: 400, corpo: { message: 'Escolha uma data ou um turno diferente do atual' } };
                 }
+
+                // o próprio agendamento não ocupa a vaga que está deixando
+                const vaga = await conferirVaga(ag.pos_id, novaData, turnoPedido, { db: trx, ignorarSolId: Number(id) });
+                if (vaga.erro) return { status: 409, corpo: { message: vaga.erro } };
 
                 if (ag.sol_origem_id) {
                     const origem = await trx('solicitacao').where('sol_id', ag.sol_origem_id).first('sol_data_vencimento');
@@ -810,10 +850,15 @@ export default {
 
                 const n = await trx('solicitacao')
                     .where({ sol_id: id, sol_status: 'agendado' })
-                    .update({ sol_data_de_coleta: novaData, sol_data_anterior: dataAtual });
+                    .update({
+                        sol_data_de_coleta: novaData, sol_turno: vaga.turno, sol_data_anterior: dataAtual,
+                        // a confirmação de presença era da data antiga
+                        sol_presenca: null, sol_presenca_em: null,
+                    });
                 if (!n) return { status: 409, corpo: { message: 'Só é possível remarcar agendamentos ainda não realizados.' } };
 
-                const detalhe = `${ag.sol_protocolo ?? 'Agendamento ' + id} · de ${dataBR(dataAtual)} para ${dataBR(novaData)}` +
+                const comTurno = (data, turno) => `${dataBR(data)}${turno ? ` (${ROTULO_TURNO[turno]})` : ''}`;
+                const detalhe = `${ag.sol_protocolo ?? 'Agendamento ' + id} · de ${comTurno(dataAtual, turnoAtual)} para ${comTurno(novaData, vaga.turno)}` +
                     (motivoLimpo ? ` · Motivo: ${motivoLimpo}` : '');
                 await registrarHistorico(trx, req.session, {
                     sol_id: Number(id), acao: ACOES.REMARCADA, de: 'agendado', para: 'agendado', detalhe,
@@ -826,7 +871,7 @@ export default {
 
                 return {
                     status: 200,
-                    corpo: { message: 'Agendamento remarcado', sol_id: Number(id), sol_data_de_coleta: novaData, sol_data_anterior: dataAtual },
+                    corpo: { message: 'Agendamento remarcado', sol_id: Number(id), sol_data_de_coleta: novaData, sol_turno: vaga.turno, sol_data_anterior: dataAtual },
                 };
             });
 

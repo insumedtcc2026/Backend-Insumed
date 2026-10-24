@@ -21,6 +21,8 @@ import autorizarCron from "./middleware/autorizarCron.js";
 import { limiteLeituraQR } from "./middleware/limiteLeituraQR.js";
 import equipeControllers from "./controllers/equipeControllers.js";
 import autorizarUniversal from "./middleware/autorizarUniversal.js";
+import agendaControllers from "./controllers/agendaControllers.js";
+import participacaoControllers from "./controllers/participacaoControllers.js";
 
 
 const routes = express.Router();
@@ -48,6 +50,9 @@ routes.put(
 );
 // ficha completa do paciente (dados, prescrições e agendamentos) para o admin
 routes.get('/pacientes/:id/resumo', authorization, autorizarAdmin, pacientesControllers.resumoPaciente);
+// prioridade legal: o paciente declara, a unidade confere
+routes.patch('/pacientes/minha-prioridade', authorization, autorizarPaciente, pacientesControllers.minhaPrioridade);
+routes.patch('/pacientes/:id/prioridade', authorization, autorizarAdmin, pacientesControllers.conferirPrioridade);
 
 // Perfil pessoal do admin e do autorizador
 const autorizarAdminOuAut = (req, res, next) =>
@@ -86,6 +91,12 @@ routes.get('/validar', authorization, (req, res)=>{
 
 //Rotas do posto de coleta 
 
+// horário da unidade: leitura pública; turnos, vagas e dias fechados pelo admin
+routes.get('/postos/:id/horarios', agendaControllers.horarios);
+routes.put('/postos/:id/horarios', authorization, autorizarAdmin, agendaControllers.salvarHorarios);
+routes.post('/postos/:id/bloqueios', authorization, autorizarAdmin, agendaControllers.criarBloqueio);
+routes.delete('/postos/:id/bloqueios/:bloqueio', authorization, autorizarAdmin, agendaControllers.removerBloqueio);
+routes.get('/postos/:id/agenda', authorization, autorizarAdmin, agendaControllers.ocupacao);
 routes.get('/postos/:id' , postocoleta.listarporid)
 routes.get('/postos' , postocoleta.listar)
 
@@ -143,9 +154,15 @@ routes.patch('/agendamentos/:id/cancelar', authorization, autorizarAdmin, valida
 routes.patch('/agendamentos/:id/recado', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.salvarRecado);
 // nova data no mesmo agendamento (mesmo protocolo)
 routes.patch('/agendamentos/:id/remarcar', authorization, autorizarAdmin, validarAcessoSolicitacao, agendamentosControllers.remarcar);
+routes.patch('/agendamentos/:id/pedido-outra-data', authorization, autorizarAdmin, validarAcessoSolicitacao, participacaoControllers.responderPedido);
 
 routes.get('/meus-agendamentos', authorization, agendamentosControllers.listarMeusAgendamentos);
 routes.get('/meus-agendamentos/proximo', authorization, agendamentosControllers.proximoAgendamento);
+// o paciente na agenda: outra data, presença e cancelamento do próprio agendamento
+routes.get('/meus-agendamentos/:id/opcoes', authorization, autorizarPaciente, participacaoControllers.opcoes);
+routes.post('/meus-agendamentos/:id/outra-data', authorization, autorizarPaciente, participacaoControllers.pedirOutraData);
+routes.patch('/meus-agendamentos/:id/presenca', authorization, autorizarPaciente, participacaoControllers.presenca);
+routes.patch('/meus-agendamentos/:id/cancelar', authorization, autorizarPaciente, participacaoControllers.cancelarPeloPaciente);
 
 //rotas insumos
 routes.patch('/insumos/:id', authorization,autorizarAdmin, insumosControllers.movimentar);

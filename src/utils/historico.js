@@ -21,6 +21,9 @@ export const ACOES = {
   REMARCADA: 'remarcada',                // admin mudou a data do agendamento (mesmo protocolo)
   REFEITA: 'pedido_refeito',             // admin reenviou ao autorizador uma prescrição não autorizada
   NAO_COMPARECEU: 'nao_compareceu',      // sistema: data passou há mais de 7 dias sem retirada
+  OUTRA_DATA_PEDIDA: 'outra_data_pedida',     // paciente pediu outra data/turno
+  OUTRA_DATA_RECUSADA: 'outra_data_recusada', // unidade recusou o pedido (aceito = REMARCADA)
+  PRESENCA: 'presenca_respondida',       // paciente respondeu "vou" ou "não vou"
 };
 
 // Como achar quem está logado em cada tabela. A tabela "administrador" não

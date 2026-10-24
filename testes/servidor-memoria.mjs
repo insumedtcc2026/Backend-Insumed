@@ -74,6 +74,11 @@ const migracao6 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10
 db.public.none(
   migracao6.slice(migracao6.indexOf('-- @pgmem-inicio'), migracao6.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
+// migração de 27/10 (etapa 3: agenda com turnos, outra data, presença, prioridade)
+const migracao7 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-27_agenda.sql'), 'utf8');
+db.public.none(
+  migracao7.slice(migracao7.indexOf('-- @pgmem-inicio'), migracao7.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
 
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
@@ -116,6 +121,22 @@ for (const [pac, status, motivo, data] of [[ana.pac_id, 'agendado', null, amanha
   await knex('solicitacao').where('sol_id', id).update({ sol_protocolo: `AG${String(id).padStart(6, '0')}`, sol_codigo_qr: randomUUID() });
   await knex('coleta').insert({ sol_id: id, ins_id: fralda.ins_id, quantidade: 5 });
 }
+
+// etapa 3: a UBS Centro atende todos os dias (para testar em qualquer dia),
+// com vagas por turno; a UBS Vila Nova fica no horário padrão
+for (let dia = 0; dia <= 6; dia++) {
+  await knex('posto_horario').insert([
+    { pos_id: p1.pos_id, phr_dia_semana: dia, phr_turno: 'manha', phr_abre: '08:00', phr_fecha: '12:00', phr_vagas: 6 },
+    { pos_id: p1.pos_id, phr_dia_semana: dia, phr_turno: 'tarde', phr_abre: '13:00', phr_fecha: '17:00', phr_vagas: 4 },
+  ]);
+}
+// a Ana pediu outra data para o agendamento de amanhã; o Bruno declarou deficiência
+const [agAmanha] = await knex('solicitacao').where({ pac_id: ana.pac_id, sol_status: 'agendado', sol_data_de_coleta: amanha }).select('sol_id');
+await knex('solicitacao').where('sol_id', agAmanha.sol_id).update({
+  sol_turno: 'manha', sol_pedido_data: daqui10, sol_pedido_turno: 'tarde', sol_pedido_motivo: 'Tenho consulta no mesmo horário',
+  sol_pedido_situacao: 'pedido', sol_pedido_em: new Date(),
+});
+await knex('pacientes').where('pac_id', bruno.pac_id).update({ pac_pcd: true });
 
 await import(pathToFileURL(path.join(BACKEND, 'src/server.js')).href);
 console.log('Backend local de teste pronto (pg-mem) em http://localhost:3344');

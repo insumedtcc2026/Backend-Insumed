@@ -4,6 +4,7 @@ import {
 } from '../utils/validacoes.js';
 import { cadastrarComConvite } from '../utils/equipe.js';
 import { comItens } from '../utils/itensPrescricao.js';
+import { COLUNAS_PRIORIDADE, comPrioridade, ordemPrioridade } from '../utils/prioridade.js';
 import { ACOES, registrarHistorico } from '../utils/historico.js';
 import { filtroBuscaPaciente, paginar } from '../utils/paginacao.js';
 import { COLUNA_VERSOES, comVersaoAnterior, numerarVersoes, versoesJoin } from '../utils/versoes.js';
@@ -78,12 +79,16 @@ export default {
             "sol.sol_prescricao_tipo", "sol.sol_insumo_quant", "sol.sol_observacao_equipe",
             "sol.sol_periodicidade_dias",
             "pac.pac_nome", "pac.pac_cpf", "pac.pac_avatar",
+            ...COLUNAS_PRIORIDADE,
             "ins.ins_nome", "pos.pos_nome",
             // > 0 = o paciente reenviou uma versão corrigida antes da revisão
             COLUNA_VERSOES,
-        ).orderBy("sol.sol_data_solicitacao", "asc").orderBy("sol.sol_id", "asc");
+        )
+            // prioridade legal (80+, depois 60+/PcD/gestante) e a data de envio
+            .orderBy(ordemPrioridade(dataHojeBrasil()))
+            .orderBy("sol.sol_data_solicitacao", "asc").orderBy("sol.sol_id", "asc");
 
-        const numerar = numerarVersoes;
+        const numerar = (linhas) => comPrioridade(numerarVersoes(linhas), dataHojeBrasil());
 
         if (req.query.page !== undefined) {
             const pagina = await paginar(query, montar, req.query);
@@ -124,7 +129,8 @@ export default {
           .leftJoin("insumo as ins", "ins.ins_id", "sol.ins_id")
           .leftJoin(...versoesJoin("sol"))
           .select("sol.sol_id", "sol.sol_data_solicitacao", "sol.sol_insumo_quant", "pac.pac_nome", "ins.ins_nome",
-            COLUNA_VERSOES)
+            ...COLUNAS_PRIORIDADE, COLUNA_VERSOES)
+          .orderBy(ordemPrioridade(dataHojeBrasil()))
           .orderBy("sol.sol_data_solicitacao", "asc")
           .limit(5),
         minhasDecisoes()
@@ -138,7 +144,7 @@ export default {
         comNovaVersao,
         autorizadas30,
         naoAutorizadas30,
-        fila: await comItens(numerarVersoes(fila)),
+        fila: await comItens(comPrioridade(numerarVersoes(fila), dataHojeBrasil())),
         recentes: recentes.map((r) => ({ sol_id: r.sol_id, acao: r.his_acao, quando: r.his_criado_em })),
       });
     } catch (error) {

@@ -32,6 +32,7 @@ export const LINKS = {
   filaAutorizador: '/verprescricoesaprovadas?status=Revisado',
   analisarAutorizador: (id) => `/autorizador/solicitacao/${id}`,
   insumosAdmin: '/insumos',
+  pedidosAdmin: '/Agendamentosadm?aba=pedidos',
 };
 
 const plural = (n, um, varios) => (n === 1 ? um : varios);
@@ -246,7 +247,8 @@ const REGRAS = {
   },
 
   async [ACOES.REMARCADA](db, his, c, criar) {
-    const datas = /de (\d{2}\/\d{2}\/\d{4}) para (\d{2}\/\d{2}\/\d{4})/.exec(his.his_detalhe ?? '');
+    // "de 01/11/2026 (manhã) para 03/11/2026 (tarde)" (o turno é opcional)
+    const datas = /de (\d{2}\/\d{2}\/\d{4}(?: \([^)]+\))?) para (\d{2}\/\d{2}\/\d{4}(?: \([^)]+\))?)/.exec(his.his_detalhe ?? '');
     const motivo = /Motivo:/.test(his.his_detalhe ?? '') ? motivoDoDetalhe(his.his_detalhe) : null;
     const quando = datas ? `de ${datas[1]} para ${datas[2]}` : `para ${dataBR(c.sol_data_de_coleta)}`;
     await criar([{
@@ -269,6 +271,21 @@ const REGRAS = {
 
   async [ACOES.CANCELADA](db, his, c, criar) {
     const motivo = motivoDoDetalhe(his.his_detalhe) || c.sol_motivo_cancelamento;
+    // o próprio paciente cancelou: quem precisa saber é a unidade
+    if (his.his_usuario_tipo === 'PACIENTE') {
+      const admins = await adminsDoPosto(db, c.pos_id);
+      await criar(admins.map((dest) => ({
+        dest, evento: 'cancelada_pelo_paciente', tom: 'alerta', prioridade: 2,
+        titulo: 'Paciente cancelou a coleta',
+        mensagem: comMotivo(
+          `${primeiroNome(c.pac_nome)} cancelou a coleta de ${dataBR(c.sol_data_de_coleta)}` +
+            `${c.sol_protocolo ? ` (protocolo ${c.sol_protocolo})` : ''}. O estoque reservado foi liberado.`,
+          motivo,
+        ),
+        link: LINKS.agendaAdmin(c.sol_protocolo ?? String(c.sol_id)),
+      })));
+      return;
+    }
     await criar([{
       dest: paciente(c.pac_id), evento: 'coleta_cancelada', tom: 'erro', prioridade: 1,
       titulo: 'Agendamento cancelado',
@@ -278,6 +295,43 @@ const REGRAS = {
       ) + ' Consulte os detalhes e as próximas orientações em Meus agendamentos.',
       link: LINKS.agendamentoPaciente(c.sol_id),
     }]);
+  },
+
+  async [ACOES.OUTRA_DATA_PEDIDA](db, his, c, criar) {
+    const pedido = /para (\d{2}\/\d{2}\/\d{4}(?: \([^)]+\))?)/.exec(his.his_detalhe ?? '');
+    const admins = await adminsDoPosto(db, c.pos_id);
+    await criar(admins.map((dest) => ({
+      dest, evento: 'outra_data_pedida', tom: 'alerta', prioridade: 1,
+      titulo: 'Pedido de outra data',
+      mensagem: `${primeiroNome(c.pac_nome)} pediu para trocar a coleta de ${dataBR(c.sol_data_de_coleta)}` +
+        `${pedido ? ` para ${pedido[1]}` : ''}. Aceite ou recuse na agenda.`,
+      link: LINKS.pedidosAdmin,
+    })));
+  },
+
+  async [ACOES.OUTRA_DATA_RECUSADA](db, his, c, criar) {
+    await criar([{
+      dest: paciente(c.pac_id), evento: 'outra_data_recusada', tom: 'alerta', prioridade: 1,
+      titulo: 'Pedido de outra data não atendido',
+      mensagem: comMotivo(
+        `A unidade não conseguiu trocar a data da sua coleta. Ela continua em ${dataBR(c.sol_data_de_coleta)}.`,
+        motivoDoDetalhe(his.his_detalhe),
+      ) + ' Você pode pedir outra opção em Meus agendamentos.',
+      link: LINKS.agendamentoPaciente(c.sol_id),
+    }]);
+  },
+
+  async [ACOES.PRESENCA](db, his, c, criar) {
+    // "vou" não gera aviso; "não vou" avisa a unidade para liberar o turno
+    if (!/não vai/.test(his.his_detalhe ?? '')) return;
+    const admins = await adminsDoPosto(db, c.pos_id);
+    await criar(admins.map((dest) => ({
+      dest, evento: 'presenca_nao_vou', tom: 'alerta', prioridade: 2,
+      titulo: 'Paciente não vai à coleta',
+      mensagem: `${primeiroNome(c.pac_nome)} avisou que não vai à coleta de ${dataBR(c.sol_data_de_coleta)}` +
+        `${c.sol_protocolo ? ` (protocolo ${c.sol_protocolo})` : ''}. O turno pode ser liberado se a coleta for cancelada ou remarcada.`,
+      link: LINKS.agendaAdmin(c.sol_protocolo ?? String(c.sol_id)),
+    })));
   },
 
   async [ACOES.CONCLUIDA](db, his, c, criar) {

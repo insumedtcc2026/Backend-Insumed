@@ -12,6 +12,7 @@ import { dataHojeBrasil } from '../utils/validacoes.js';
 import { randomUUID } from 'node:crypto';
 import { dataBR, gerarProtocolo, isoData, somarDias } from '../utils/status.js';
 import { itensDasPrescricoes } from '../utils/itensPrescricao.js';
+import { proximasOpcoes, ROTULO_TURNO } from '../utils/agenda.js';
 import { adminsDoPosto, paciente } from './destinatarios.js';
 import { criarNotificacoes } from './gravar.js';
 import { carregarContexto, LINKS, primeiroNome } from './regras.js';
@@ -27,6 +28,7 @@ export const PRAZOS = {
   vencendoDias: 7,           // autorizada perto do vencimento, sem retirada
   retencaoLidasDias: 180,    // notificações lidas somem depois disso
   cicloDiasAntes: 7,         // uso contínuo: próximo ciclo criado 7 dias antes
+  presencaDiasAntes: 2,      // pergunta "você vai?" 2 dias antes da coleta
 };
 
 // Início do dia (Brasília) de "hoje - n": eventos antes disso têm mais de n dias
@@ -103,6 +105,32 @@ export async function gerarLembretes(hoje = dataHojeBrasil(), { pac_id } = {}) {
     });
   }
   return criarNotificacoes(knex, lista);
+}
+
+// ---------------------------------------------------------------
+// Confirmação de presença
+// ---------------------------------------------------------------
+
+// Dois dias antes: "Você vai retirar?". Quem já respondeu não recebe; a
+// chave leva a data, então uma remarcação gera a pergunta da nova data.
+export async function perguntarPresenca(hoje = dataHojeBrasil()) {
+  const data = somarDias(hoje, PRAZOS.presencaDiasAntes);
+  const agendamentos = await knex('solicitacao as s')
+    .leftJoin('postosdesaude as pos', 'pos.pos_id', 's.pos_id')
+    .where('s.sol_status', 'agendado')
+    .where('s.sol_data_de_coleta', data)
+    .whereNull('s.sol_presenca')
+    .select('s.sol_id', 's.pac_id', 's.sol_turno', 's.sol_protocolo', 'pos.pos_nome');
+
+  return criarNotificacoes(knex, agendamentos.map((ag) => ({
+    dest: paciente(ag.pac_id), evento: 'confirmar_presenca', tom: 'agenda', prioridade: 1,
+    titulo: 'Você vai à coleta?',
+    mensagem: `Sua coleta está marcada para ${dataBR(data)}${ag.sol_turno ? `, ${ROTULO_TURNO[ag.sol_turno]}` : ''}, ` +
+      `na ${ag.pos_nome ?? 'unidade'}. Confirme se vai ou avise que não vai, para a vaga ficar com outra pessoa.`,
+    link: LINKS.agendamentoPaciente(ag.sol_id),
+    sol_id: ag.sol_id,
+    chave: `presenca:${ag.sol_id}:${data}`,
+  })));
 }
 
 // ---------------------------------------------------------------
@@ -224,16 +252,11 @@ export async function tratarVencidas(hoje = dataHojeBrasil()) {
 // Retirada recorrente (uso contínuo)
 // ---------------------------------------------------------------
 
-// Sábado e domingo passam para segunda
-function diaUtil(iso) {
-  const dia = new Date(`${iso}T12:00:00Z`).getUTCDay();
-  return dia === 6 ? somarDias(iso, 2) : dia === 0 ? somarDias(iso, 1) : iso;
-}
-
 /**
  * Cria o agendamento do próximo ciclo das prescrições de uso contínuo,
  * PRAZOS.cicloDiasAntes dias antes da data (última retirada + frequência),
- * com os mesmos itens e na unidade da prescrição. O 1º ciclo é sempre
+ * no primeiro dia e turno com vaga a partir dela, com os mesmos itens e na
+ * unidade da prescrição. O 1º ciclo é sempre
  * agendado pela unidade.
  * Não cria: depois do vencimento, com outro ciclo agendado, nem um ciclo que
  * já existiu e foi cancelado ou faltou (esse a unidade reagenda). Rodar duas
@@ -262,10 +285,13 @@ export async function criarProximosCiclos(hoje = dataHojeBrasil()) {
 
     const prevista = somarDias(isoData(ultimo.sol_data_de_coleta), Number(p.sol_periodicidade_dias));
     if (somarDias(prevista, -PRAZOS.cicloDiasAntes) > hoje) continue;
-    // a tarefa pode ter ficado dias sem rodar: nunca no passado
-    const data = diaUtil(prevista > hoje ? prevista : somarDias(hoje, 1));
+    // a tarefa pode ter ficado dias sem rodar: nunca no passado. Primeiro
+    // dia e turno com vaga a partir da data prevista, até o vencimento.
+    const desde = prevista > hoje ? prevista : somarDias(hoje, 1);
     const vencimento = isoData(p.sol_data_vencimento);
-    if (vencimento && data > vencimento) continue;
+    const [opcao] = await proximasOpcoes(p.pos_id, desde, { limite: 1, ate: vencimento });
+    if (!opcao) continue;
+    const { data, turno } = opcao;
 
     const itens = (await itensDasPrescricoes([p.sol_id])).get(Number(p.sol_id)) ?? [];
     if (!itens.length) continue;
@@ -281,6 +307,7 @@ export async function criarProximosCiclos(hoje = dataHojeBrasil()) {
             sol_insumo_quant: 0,
             sol_origem_id: p.sol_id,
             sol_ciclo: ciclo,
+            sol_turno: turno,
             sol_codigo_qr: randomUUID(),
           })
           .returning('sol_id');
@@ -290,7 +317,7 @@ export async function criarProximosCiclos(hoje = dataHojeBrasil()) {
         await trx('coleta').insert(itens.map((i) => ({ sol_id, ins_id: i.ins_id, quantidade: i.quantidade })));
 
         const posto = await trx('postosdesaude').where('pos_id', p.pos_id).first('pos_nome');
-        const detalhe = `${protocolo} · coleta em ${dataBR(data)} · ${posto?.pos_nome ?? 'unidade'} · ${ciclo}ª retirada (uso contínuo)`;
+        const detalhe = `${protocolo} · coleta em ${dataBR(data)} (${ROTULO_TURNO[turno]}) · ${posto?.pos_nome ?? 'unidade'} · ${ciclo}ª retirada (uso contínuo)`;
         await registrarHistorico(trx, null, { sol_id, acao: ACOES.AGENDADA, para: 'agendado', detalhe });
         await registrarHistorico(trx, null, {
           sol_id: p.sol_id, acao: ACOES.AGENDADA, de: 'Autorizado', para: 'Autorizado', detalhe,
@@ -411,6 +438,7 @@ export async function tarefaDiaria(hoje = dataHojeBrasil()) {
   resultado.ciclos = await criarProximosCiclos(hoje);
   resultado.eventos = await processarEventos({ limite: 500, repetirFalhas: true });
   resultado.lembretes = await gerarLembretes(hoje);
+  resultado.presenca = await perguntarPresenca(hoje);
   resultado.coletasSemBaixa = await avisarColetasAtrasadas(hoje);
   resultado.pendencias = await avisarPendencias(hoje);
   resultado.limpeza = await limparAntigas();

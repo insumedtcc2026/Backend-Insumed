@@ -6,6 +6,7 @@ import { COLUNA_VERSOES, numerarVersoes, versoesJoin } from '../utils/versoes.js
 import { dataBR, prescricaoVencida, STATUS_AGENDAMENTO, STATUS_AGENDAMENTO_SEM_ENTREGA } from '../utils/status.js';
 import { notificar } from '../notificacoes/processador.js';
 import { comItens, lerItens, lerPeriodicidade, resumoRecorrencia, salvarItens } from '../utils/itensPrescricao.js';
+import { COLUNAS_PRIORIDADE, comPrioridade, ordemPrioridade } from '../utils/prioridade.js';
 
 // Mesmo limite do formulário de envio (EnviarSolicitacao.tsx)
 const TAMANHO_MAX_PRESCRICAO = 5 * 1024 * 1024;
@@ -172,9 +173,13 @@ async buscarprescricoespendetes(req, res) {
                 "pac.pac_nome",
                 "pac.pac_cpf",
                 "pac.pac_avatar",
+                ...COLUNAS_PRIORIDADE,
+                "sol.sol_periodicidade_dias",
                 // prescrição autorizada que já virou agendamento (agendado ou
                 // concluído): a tela troca "Agendar" por "Ver agendamento"
                 knex.raw("(ag.sol_origem_id IS NOT NULL) AS agendamento_ativo"),
+                // uso contínuo: só um ciclo "agendado" bloqueia o próximo
+                knex.raw("(aberto.sol_origem_id IS NOT NULL) AS agendamento_em_aberto"),
                 // quantas versões anteriores (> 0 = o paciente já corrigiu após pedido de reenvio)
                 COLUNA_VERSOES
             )
@@ -188,12 +193,24 @@ async buscarprescricoespendetes(req, res) {
                 "ag.sol_origem_id",
                 "sol.sol_id"
             )
+            .leftJoin(
+                knex("solicitacao")
+                    .select("sol_origem_id")
+                    .whereNotNull("sol_origem_id")
+                    .where("sol_status", "agendado")
+                    .groupBy("sol_origem_id")
+                    .as("aberto"),
+                "aberto.sol_origem_id",
+                "sol.sol_id"
+            )
             .whereIn("sol.sol_status", [
                 "Pendente",
                 "Autorizado",
                 "Revisado",
                 "Nao Autorizado"
             ])
+            // prioridade legal (80+, depois 60+/PcD/gestante) e, dentro dela, a data de envio
+            .orderBy(ordemPrioridade(dataHojeBrasil()))
             .orderBy(
                 "sol.sol_data_solicitacao",
                 "asc"
@@ -211,7 +228,12 @@ async buscarprescricoespendetes(req, res) {
         }
 
 
-        const solicitacoes = numerarVersoes(await query);
+        const solicitacoes = comPrioridade(numerarVersoes(await query), dataHojeBrasil())
+            .map(({ agendamento_em_aberto, ...s }) => ({
+                ...s,
+                // uso contínuo: com a retirada anterior concluída, pode agendar o próximo ciclo
+                agendamento_ativo: s.sol_periodicidade_dias ? Boolean(agendamento_em_aberto) : Boolean(s.agendamento_ativo),
+            }));
 
         return res.status(200).json(solicitacoes);
 

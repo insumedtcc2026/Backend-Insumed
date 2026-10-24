@@ -82,6 +82,11 @@ const migracao6 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10
 db.public.none(
   migracao6.slice(migracao6.indexOf('-- @pgmem-inicio'), migracao6.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
 );
+// migração de 27/10 (etapa 3: agenda com turnos, outra data, presença, prioridade)
+const migracao7 = fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-27_agenda.sql'), 'utf8');
+db.public.none(
+  migracao7.slice(migracao7.indexOf('-- @pgmem-inicio'), migracao7.indexOf('-- @pgmem-fim')).replace(/^--.*$/gm, '')
+);
 
 const knex = db.adapters.createKnex();
 mock.module(pathToFileURL(path.join(BACKEND, 'src/database/index.js')).href, { defaultExport: knex });
@@ -109,6 +114,16 @@ before(async () => {
   const [p1] = await knex('postosdesaude').insert({ pos_nome: 'Posto Centro' }).returning('pos_id');
   const [p2] = await knex('postosdesaude').insert({ pos_nome: 'Posto Norte' }).returning('pos_id');
   ids.posto1 = p1.pos_id; ids.posto2 = p2.pos_id;
+  // as unidades de teste atendem todos os dias, sem limite (os testes usam
+  // "amanhã", que pode cair no fim de semana); a agenda tem testes próprios (T)
+  for (const pos_id of [ids.posto1, ids.posto2]) {
+    for (let dia = 0; dia <= 6; dia++) {
+      await knex('posto_horario').insert([
+        { pos_id, phr_dia_semana: dia, phr_turno: 'manha', phr_abre: '08:00', phr_fecha: '12:00' },
+        { pos_id, phr_dia_semana: dia, phr_turno: 'tarde', phr_abre: '13:00', phr_fecha: '17:00' },
+      ]);
+    }
+  }
   const [a] = await knex('pacientes').insert({ pac_nome: 'Ana Souza', pac_email: 'ana@teste.com', pac_senha: senha, pac_cpf: '529.982.247-25', pac_telefone: '(24) 98888-7777' }).returning('pac_id');
   const [b] = await knex('pacientes').insert({ pac_nome: 'Bruno Lima', pac_email: 'bruno@teste.com', pac_senha: senha, pac_cpf: '111.444.777-35', pac_telefone: '(24) 97777-6666' }).returning('pac_id');
   ids.pacA = a.pac_id; ids.pacB = b.pac_id;
@@ -635,9 +650,10 @@ test('G3 painel do admin conta a fila de trabalho do posto', async () => {
   assert.equal((await request(app).get('/painel/admin').set(auth(tk.aut))).status, 403);
 });
 
-test('G4 datas sugeridas: só dias úteis, futuros, e as com menos coletas', async () => {
+test('G4 datas sugeridas: unidade sem horário usa segunda a sexta; futuras e as com menos coletas', async () => {
   assert.equal((await request(app).get('/agendamentos/datas-sugeridas').set(auth(tk.adm))).status, 400);
-  const r = await request(app).get('/agendamentos/datas-sugeridas').query({ pos_id: ids.posto1 }).set(auth(tk.adm));
+  const [p3] = await knex('postosdesaude').insert({ pos_nome: 'Posto Sul (sem horário)' }).returning('pos_id');
+  const r = await request(app).get('/agendamentos/datas-sugeridas').query({ pos_id: p3.pos_id }).set(auth(tk.adm));
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.datas.length, 14);
   for (const d of r.body.datas) {
@@ -646,8 +662,11 @@ test('G4 datas sugeridas: só dias úteis, futuros, e as com menos coletas', asy
     assert.ok(dia !== 0 && dia !== 6, 'sem fim de semana');
   }
   assert.equal(r.body.sugeridas.length, 3);
-  const cheio = r.body.datas.find((d) => d.agendados > 0);
-  if (cheio) assert.ok(!r.body.sugeridas.includes(cheio.data), 'dia com coleta não é sugerido antes de dias vazios');
+  assert.ok(r.body.opcoes.every((o) => ['manha', 'tarde'].includes(o.turno) && o.livres === null));
+
+  const p1 = await request(app).get('/agendamentos/datas-sugeridas').query({ pos_id: ids.posto1 }).set(auth(tk.adm));
+  const cheio = p1.body.datas.find((d) => d.agendados > 0);
+  if (cheio) assert.ok(!p1.body.sugeridas.includes(cheio.data), 'dia com coleta não é sugerido antes de dias vazios');
 });
 
 test('G5 ficha do paciente para o admin; busca por nome', async () => {
@@ -1660,8 +1679,7 @@ test('R4 tarefa diária cria o próximo ciclo 7 dias antes, uma vez só, e para 
   assert.equal(c2.sol_status, 'agendado');
   assert.equal(c2.sol_ciclo, 2);
   assert.ok(c2.sol_protocolo);
-  const dia = new Date(`${String(c2.sol_data_de_coleta instanceof Date ? c2.sol_data_de_coleta.toISOString() : c2.sol_data_de_coleta).slice(0, 10)}T12:00:00Z`).getUTCDay();
-  assert.ok(dia >= 1 && dia <= 5, 'cai em dia útil');
+  assert.ok(['manha', 'tarde'].includes(c2.sol_turno));
   // mesmos itens da prescrição (não só o que foi pedido no 1º agendamento)
   const coleta = await knex('coleta').where('sol_id', c2.sol_id).orderBy('ins_id');
   assert.deepEqual(coleta.map((c) => [c.ins_id, c.quantidade]), [[ids.bolsa, 5], [ids.placa, 2]]);
@@ -1670,4 +1688,222 @@ test('R4 tarefa diária cria o próximo ciclo 7 dias antes, uma vez só, e para 
   await request(app).patch(`/agendamentos/${c2.sol_id}/concluir`).set(auth(tk.adm)).expect(200);
   await criarProximosCiclos(somar(proxima, 25));
   assert.equal((await ciclosDe()).length, 2);
+});
+
+// ------------------------------------------------------------------
+// Etapa 3 — Agenda com turnos e vagas, outra data, presença, prioridade
+// ------------------------------------------------------------------
+
+// Posto 3 só atende no dia da semana de "daqui a 3 dias", de manhã, com 1 vaga
+const t3 = { dia: somar(hoje, 3) };
+const msgDe = (r) => r.body.error ?? r.body.message;
+const diaSemana = (iso) => new Date(`${iso}T12:00:00Z`).getUTCDay();
+const agPosto3 = (extra = {}) => ({
+  paciente: { pac_id: ids.pacA }, posto: { pos_id: ids.posto3 }, sol_data_de_coleta: t3.dia,
+  itens: [{ ins_id: ids.insPosto3, quantidade: 1 }], ...extra,
+});
+
+test('T1 horários da unidade: leitura pública, só o admin da unidade altera, validação', async () => {
+  const [p3] = await knex('postosdesaude').insert({ pos_nome: 'Posto Leste' }).returning('pos_id');
+  ids.posto3 = p3.pos_id;
+  const [ins] = await knex('insumo').insert({ ins_nome: 'Sonda', ins_quantidade: 50, pos_id: ids.posto3 }).returning('ins_id');
+  ids.insPosto3 = ins.ins_id;
+  tk.admLeste = jwt.sign({ email: 'leste@teste.com', posto_id: ids.posto3, tp_universal: false, tipo: 'ADMIN' },
+    process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+
+  const padrao = await request(app).get(`/postos/${ids.posto3}/horarios`);
+  assert.equal(padrao.status, 200);
+  assert.equal(padrao.body.padrao, true);
+  assert.equal(padrao.body.horarios.length, 10);
+
+  const turno = { dia_semana: diaSemana(t3.dia), turno: 'manha', abre: '08:00', fecha: '12:00', vagas: 1 };
+  assert.equal((await request(app).put(`/postos/${ids.posto3}/horarios`).set(auth(tk.adm)).send({ horarios: [turno] })).status, 403);
+  assert.equal((await request(app).put(`/postos/${ids.posto3}/horarios`).set(auth(tk.pacA)).send({ horarios: [turno] })).status, 403);
+  const invalidos = [
+    [[{ ...turno, turno: 'noite' }], /Turno inválido/],
+    [[{ ...turno, abre: '8h' }], /HH:MM/],
+    [[{ ...turno, abre: '12:00', fecha: '08:00' }], /depois/],
+    [[{ ...turno, vagas: 0 }], /Vagas/],
+    [[turno, turno], /duas vezes/],
+    [[], /pelo menos um turno/],
+  ];
+  for (const [horarios, msg] of invalidos) {
+    const r = await request(app).put(`/postos/${ids.posto3}/horarios`).set(auth(tk.admLeste)).send({ horarios });
+    assert.equal(r.status, 400, JSON.stringify(horarios));
+    assert.match(msgDe(r), msg);
+  }
+  const ok = await request(app).put(`/postos/${ids.posto3}/horarios`).set(auth(tk.admLeste)).send({ horarios: [turno] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const lido = await request(app).get(`/postos/${ids.posto3}/horarios`);
+  assert.equal(lido.body.padrao, false);
+  assert.deepEqual(lido.body.horarios, [turno]);
+});
+
+test('T2 vagas por turno: lota, recusa outro turno e dia sem atendimento; remarcar ignora o próprio', async () => {
+  const r1 = await request(app).post('/agendamentos').set(auth(tk.admLeste)).send(agPosto3());
+  assert.equal(r1.status, 201, JSON.stringify(r1.body));
+  assert.equal((await knex('solicitacao').where('sol_id', r1.body.sol_id).first()).sol_turno, 'manha');
+  ids.agT = r1.body.sol_id;
+
+  const lotado = await request(app).post('/agendamentos').set(auth(tk.admLeste)).send(agPosto3({ paciente: { pac_id: ids.pacB } }));
+  assert.equal(lotado.status, 409);
+  assert.match(msgDe(lotado), /Não há vagas|lotado/);
+  const tarde = await request(app).post('/agendamentos').set(auth(tk.admLeste)).send(agPosto3({ paciente: { pac_id: ids.pacB }, sol_turno: 'tarde' }));
+  assert.equal(tarde.status, 409);
+  assert.match(msgDe(tarde), /não atende no turno da tarde/);
+  const outroDia = await request(app).post('/agendamentos').set(auth(tk.admLeste)).send(agPosto3({ paciente: { pac_id: ids.pacB }, sol_data_de_coleta: somar(hoje, 4) }));
+  assert.equal(outroDia.status, 409);
+  assert.match(msgDe(outroDia), /não atende neste dia/);
+
+  const agenda = await request(app).get(`/postos/${ids.posto3}/agenda?inicio=${t3.dia}&fim=${t3.dia}`).set(auth(tk.admLeste));
+  assert.equal(agenda.status, 200);
+  assert.deepEqual(agenda.body.map((a) => [a.turno, a.vagas, a.ocupadas, a.livres]), [['manha', 1, 1, 0]]);
+
+  // a própria vaga não conta contra ela mesma ao remarcar para o mesmo turno
+  const sug = await request(app).get(`/agendamentos/datas-sugeridas?pos_id=${ids.posto3}`).set(auth(tk.admLeste));
+  assert.equal(sug.status, 200);
+  assert.ok(!sug.body.opcoes.some((o) => o.data === t3.dia), 'dia lotado não aparece nas opções');
+});
+
+test('T3 dia fechado: bloqueia o agendamento e avisa quantos já estavam marcados', async () => {
+  const proxSemana = somar(t3.dia, 7);
+  assert.equal((await request(app).post(`/postos/${ids.posto3}/bloqueios`).set(auth(tk.adm)).send({ data: proxSemana })).status, 403);
+  assert.equal((await request(app).post(`/postos/${ids.posto3}/bloqueios`).set(auth(tk.admLeste)).send({ data: ontem })).status, 400);
+
+  const b = await request(app).post(`/postos/${ids.posto3}/bloqueios`).set(auth(tk.admLeste)).send({ data: t3.dia, motivo: 'Dedetização' });
+  assert.equal(b.status, 201, JSON.stringify(b.body));
+  assert.equal(b.body.agendamentos_no_dia, 1);
+  assert.equal((await request(app).post(`/postos/${ids.posto3}/bloqueios`).set(auth(tk.admLeste)).send({ data: t3.dia })).status, 409);
+
+  const fechado = await request(app).post('/agendamentos').set(auth(tk.admLeste)).send(agPosto3({ paciente: { pac_id: ids.pacB } }));
+  assert.equal(fechado.status, 409);
+  assert.match(msgDe(fechado), /fechada neste dia \(Dedetização\)/);
+  const pub = await request(app).get(`/postos/${ids.posto3}/horarios`);
+  assert.equal(pub.body.bloqueios[0].motivo, 'Dedetização');
+
+  assert.equal((await request(app).delete(`/postos/${ids.posto3}/bloqueios/${b.body.id}`).set(auth(tk.admLeste))).status, 200);
+  assert.equal((await request(app).delete(`/postos/${ids.posto3}/bloqueios/${b.body.id}`).set(auth(tk.admLeste))).status, 404);
+});
+
+test('T4 pedido de outra data: só o dono, um por vez, unidade aceita (remarca) ou recusa com motivo', async () => {
+  // libera mais vagas para a semana seguinte
+  await request(app).put(`/postos/${ids.posto3}/horarios`).set(auth(tk.admLeste)).send({ horarios: [
+    { dia_semana: diaSemana(t3.dia), turno: 'manha', abre: '08:00', fecha: '12:00', vagas: 1 },
+    { dia_semana: diaSemana(t3.dia), turno: 'tarde', abre: '13:00', fecha: '17:00', vagas: 2 },
+  ] }).expect(200);
+  const novaData = somar(t3.dia, 7);
+
+  const op = await request(app).get(`/meus-agendamentos/${ids.agT}/opcoes`).set(auth(tk.pacA));
+  assert.equal(op.status, 200);
+  assert.ok(op.body.some((o) => o.data === t3.dia && o.turno === 'tarde'));
+  assert.ok(!op.body.some((o) => o.data === t3.dia && o.turno === 'manha'), 'o turno atual não é opção');
+  assert.equal((await request(app).get(`/meus-agendamentos/${ids.agT}/opcoes`).set(auth(tk.pacB))).status, 404);
+
+  const pedir = (corpo, token = tk.pacA) => request(app).post(`/meus-agendamentos/${ids.agT}/outra-data`).set(auth(token)).send(corpo);
+  assert.equal((await pedir({ data: novaData, turno: 'tarde' }, tk.pacB)).status, 404);
+  assert.equal((await pedir({ data: novaData })).status, 400);
+  assert.equal((await pedir({ data: t3.dia, turno: 'manha' })).status, 400);
+  assert.equal((await pedir({ data: somar(t3.dia, 1), turno: 'manha' })).status, 409); // não atende
+  const p1 = await pedir({ data: novaData, turno: 'tarde', motivo: 'Consulta no mesmo dia' });
+  assert.equal(p1.status, 201, JSON.stringify(p1.body));
+  assert.equal((await pedir({ data: somar(novaData, 7), turno: 'tarde' })).status, 409);
+
+  const pend = await request(app).get('/agendamentos?pedido=pendente').set(auth(tk.admLeste));
+  assert.equal(pend.status, 200);
+  const lista = pend.body.dados ?? pend.body;
+  const item = lista.find((a) => a.sol_id === ids.agT);
+  assert.ok(item, 'aparece na aba de pedidos');
+  assert.equal(item.pedido_outra_data.situacao, 'pedido');
+
+  // recusa exige motivo; outra unidade não responde
+  const responder = (corpo, token = tk.admLeste) => request(app).patch(`/agendamentos/${ids.agT}/pedido-outra-data`).set(auth(token)).send(corpo);
+  assert.equal((await responder({ aceitar: false })).status, 400);
+  assert.equal((await responder({ aceitar: true }, tk.adm)).status, 403);
+  const recusa = await responder({ aceitar: false, resposta: 'Sem vaga para a sua necessidade' });
+  assert.equal(recusa.status, 200, JSON.stringify(recusa.body));
+  assert.equal((await knex('solicitacao').where('sol_id', ids.agT).first()).sol_pedido_situacao, 'recusado');
+  assert.equal((await notifs('PACIENTE', ids.pacA, 'outra_data_recusada')).length, 1);
+  assert.equal((await responder({ aceitar: true })).status, 409);
+
+  // novo pedido e aceite: vira remarcação, presença zerada
+  await knex('solicitacao').where('sol_id', ids.agT).update({ sol_presenca: 'vou' });
+  assert.equal((await pedir({ data: novaData, turno: 'tarde' })).status, 201);
+  const aceite = await responder({ aceitar: true });
+  assert.equal(aceite.status, 200, JSON.stringify(aceite.body));
+  const linha = await knex('solicitacao').where('sol_id', ids.agT).first();
+  assert.equal(linha.sol_pedido_situacao, 'aceito');
+  assert.equal(linha.sol_turno, 'tarde');
+  assert.equal(new Date(linha.sol_data_de_coleta).toISOString().slice(0, 10), novaData);
+  assert.equal(linha.sol_presenca, null);
+  const hist = await knex('historico_solicitacao').where('sol_id', ids.agT);
+  assert.ok(hist.some((h) => /pedido do paciente/.test(h.his_detalhe ?? '')));
+});
+
+test('T5 presença: paciente confirma ou avisa; tarefa pergunta 2 dias antes, uma vez só', async () => {
+  const { perguntarPresenca } = await import(pathToFileURL(path.join(BACKEND, 'src/notificacoes/tarefas.js')).href);
+  const presenca = (resposta, token = tk.pacA) => request(app).patch(`/meus-agendamentos/${ids.agT}/presenca`).set(auth(token)).send({ resposta });
+  assert.equal((await presenca('talvez')).status, 400);
+  assert.equal((await presenca('vou', tk.pacB)).status, 404);
+
+  const data = somar(t3.dia, 7);
+  const antes = (await notifs('PACIENTE', ids.pacA, 'confirmar_presenca')).length;
+  await perguntarPresenca(somar(data, -2));
+  await perguntarPresenca(somar(data, -2));
+  assert.equal((await notifs('PACIENTE', ids.pacA, 'confirmar_presenca')).length, antes + 1);
+
+  const nao = await presenca('nao_vou');
+  assert.equal(nao.status, 200, JSON.stringify(nao.body));
+  assert.equal((await knex('solicitacao').where('sol_id', ids.agT).first()).sol_presenca, 'nao_vou');
+  const lista = await request(app).get('/agendamentos').set(auth(tk.admLeste));
+  const item = (lista.body.dados ?? lista.body).find((a) => a.sol_id === ids.agT);
+  assert.equal(item.sol_presenca, 'nao_vou');
+
+  // depois de responder, a tarefa não pergunta de novo
+  await knex('notificacao').where({ not_evento: 'confirmar_presenca', not_dest_id: ids.pacA }).del();
+  await perguntarPresenca(somar(data, -2));
+  assert.equal((await notifs('PACIENTE', ids.pacA, 'confirmar_presenca')).length, 0);
+
+  // paciente cancela: vaga liberada, não dá mais para responder presença
+  const cancel = await request(app).patch(`/meus-agendamentos/${ids.agT}/cancelar`).set(auth(tk.pacA)).send({ motivo: 'Mudei de cidade' });
+  assert.equal(cancel.status, 200, JSON.stringify(cancel.body));
+  assert.equal((await knex('solicitacao').where('sol_id', ids.agT).first()).sol_status, 'cancelado');
+  assert.equal((await presenca('vou')).status, 409);
+});
+
+test('T6 prioridade legal: 80+ primeiro, depois 60+/PcD conferida, depois os demais', async () => {
+  const anos = (n) => `${Number(hoje.slice(0, 4)) - n}${hoje.slice(4)}`;
+  const novoPac = async (nome, extra) => (await knex('pacientes').insert({ pac_nome: nome, pac_email: `${nome}@t.com`, ...extra }).returning('pac_id'))[0].pac_id;
+  const comum = await novoPac('comum', { pac_data_nasc: anos(30) });
+  const pcd = await novoPac('pcd', { pac_data_nasc: anos(30) });
+  const idoso = await novoPac('idoso', { pac_data_nasc: anos(85) });
+  const sols = {};
+  for (const [nome, pac_id] of [['comum', comum], ['pcd', pcd], ['idoso', idoso]]) {
+    const [s] = await knex('solicitacao').insert({ pac_id, pos_id: ids.posto1, sol_status: 'Pendente', sol_prescricao: Buffer.from(nome) }).returning('sol_id');
+    sols[nome] = s.sol_id;
+  }
+  const tkPcd = jwt.sign({ id: pcd, tipo: 'PACIENTE' }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+
+  const ordem = async () => {
+    const r = await request(app).get('/pendentes').set(auth(tk.adm));
+    assert.equal(r.status, 200);
+    return r.body.filter((s) => Object.values(sols).includes(s.sol_id)).map((s) => [s.sol_id, s.prioridade?.grupo]);
+  };
+  // PcD declarada mas não conferida ainda não passa na frente
+  const decl = await request(app).patch('/pacientes/minha-prioridade').set(auth(tkPcd)).send({ pcd: true, gestante: false });
+  assert.equal(decl.status, 200, JSON.stringify(decl.body));
+  assert.equal(decl.body.prioridade.aguardando_conferencia, true);
+  assert.deepEqual(await ordem(), [[sols.idoso, 1], [sols.comum, 3], [sols.pcd, 3]]);
+
+  assert.equal((await request(app).patch(`/pacientes/${comum}/prioridade`).set(auth(tk.adm)).send({ conferida: true })).status, 409);
+  const conf = await request(app).patch(`/pacientes/${pcd}/prioridade`).set(auth(tk.adm)).send({ conferida: true });
+  assert.equal(conf.status, 200, JSON.stringify(conf.body));
+  assert.equal(conf.body.prioridade.motivo, 'pcd');
+  assert.deepEqual(await ordem(), [[sols.idoso, 1], [sols.pcd, 2], [sols.comum, 3]]);
+  const resumo = await request(app).get(`/pacientes/${pcd}/resumo`).set(auth(tk.adm));
+  assert.equal(resumo.body.paciente.prioridade.grupo, 2);
+
+  // mudar a declaração volta para "aguardando conferência"
+  await request(app).patch('/pacientes/minha-prioridade').set(auth(tkPcd)).send({ pcd: true, gestante: true }).expect(200);
+  assert.equal((await knex('pacientes').where('pac_id', pcd).first()).pac_prioridade_conferida, null);
+  assert.equal((await request(app).patch('/pacientes/minha-prioridade').set(auth(tkPcd)).send({ pcd: 'sim' })).status, 400);
 });
