@@ -2027,7 +2027,7 @@ test('U3 meus insumos: só prescrições autorizadas e válidas, com "indisponí
 });
 
 // ------------------------------------------------------------------
-// Etapa 5: lista de separação do dia e previsão de demanda
+// Etapa 5: lista de separação do dia
 // ------------------------------------------------------------------
 
 // Posto Sul, isolado dos outros testes, com coletas e prescrições montadas no banco
@@ -2088,40 +2088,3 @@ test('V1 lista de separação: total por insumo e lista por paciente, só da uni
   assert.equal((await request(app).get(`/agendamentos/separacao?data=${amanha}`).set(auth(tk.pacA))).status, 403);
 });
 
-test('V2 previsão de demanda: agendadas + ciclos futuros + a agendar + média das avulsas', async () => {
-  // uso contínuo a cada 10 dias, última retirada há 5 dias, vence em 25 dias:
-  // ciclos em +5, +15 e +25 (2 luvas cada)
-  const continua = await prescSul({ periodicidade: 10, vencimento: somar(hoje, 25), itens: [[sul.luva, 2]] });
-  await agSul({ pac_id: ids.pacA, data: somar(hoje, -5), status: 'concluido', origem: continua, itens: [[sul.luva, 2]] });
-  // autorizada e ainda não agendada: 5 seringas
-  await prescSul({ vencimento: somar(hoje, 60), itens: [[sul.seringa, 5]] });
-  // avulsa concluída há 10 dias: 9 seringas em 90 dias = 3 em 30 dias
-  await agSul({ pac_id: ids.pacB, data: somar(hoje, -10), status: 'concluido', itens: [[sul.seringa, 9]] });
-
-  const r = await request(app).get('/indicadores/previsao?dias=30').set(auth(sul.tk));
-  assert.equal(r.status, 200);
-  assert.equal(r.body.dias, 30);
-  const [luva, seringa] = r.body.insumos;
-  assert.equal(luva.ins_nome, 'Luva', 'ordenado pela falta');
-  assert.deepEqual([luva.estoque, luva.agendado, luva.recorrente, luva.a_agendar, luva.avulso, luva.necessidade, luva.falta],
-    [10, 7, 6, 0, 0, 13, 3]);
-  // 4 + 3 amanhã, +2 em +5 = 9, +2 em +15 = 11 > 10
-  assert.equal(luva.acaba_em, somar(hoje, 15));
-  assert.deepEqual([seringa.agendado, seringa.a_agendar, seringa.avulso, seringa.necessidade, seringa.falta, seringa.acaba_em],
-    [2, 5, 3, 10, 0, null]);
-
-  // 60 dias: o vencimento corta os ciclos (continua 6 luvas) e a média dobra
-  const r60 = await request(app).get('/indicadores/previsao?dias=60').set(auth(sul.tk));
-  const s60 = r60.body.insumos.find((i) => i.ins_id === sul.seringa);
-  assert.equal(r60.body.insumos.find((i) => i.ins_id === sul.luva).recorrente, 6);
-  assert.equal(s60.avulso, 6);
-
-  // cada admin vê só a própria unidade; o universal vê todas
-  const doCentro = await request(app).get('/indicadores/previsao?dias=30').set(auth(tk.adm));
-  assert.ok(doCentro.body.insumos.every((i) => i.pos_id === ids.posto1));
-  const todas = await request(app).get('/indicadores/previsao?dias=30').set(auth(sul.universal));
-  assert.ok(new Set(todas.body.insumos.map((i) => i.pos_id)).size >= 2);
-
-  assert.equal((await request(app).get('/indicadores/previsao?dias=45').set(auth(sul.tk))).status, 400);
-  assert.equal((await request(app).get('/indicadores/previsao?dias=30').set(auth(tk.pacA))).status, 403);
-});

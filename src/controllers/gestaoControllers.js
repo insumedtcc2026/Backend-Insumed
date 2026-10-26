@@ -1,15 +1,10 @@
-// GESTÃO (admin): lista de separação do dia e previsão de demanda.
-// As duas telas só leem o que as etapas anteriores já gravam (agendamentos,
+// GESTÃO (admin): lista de separação do dia.
+// A tela só lê o que as etapas anteriores já gravam (agendamentos,
 // itens da prescrição, retirada recorrente e estoque): nenhuma tabela nova.
 
 import knex from '../database/index.js';
-import { itensDasPrescricoes } from '../utils/itensPrescricao.js';
-import { isoData, somarDias } from '../utils/status.js';
 import { dataHojeBrasil, idValido, validarDataISO } from '../utils/validacoes.js';
 
-export const HORIZONTES_PREVISAO = [30, 60, 90];
-// Janela usada para a média das retiradas avulsas (sem uso contínuo)
-export const DIAS_HISTORICO_AVULSAS = 90;
 
 const primeiroNome = (nome) => String(nome ?? '').trim().split(/\s+/)[0] || 'Paciente';
 
@@ -103,160 +98,6 @@ export default {
     } catch (error) {
       console.error('Erro ao montar a lista de separação:', error);
       return res.status(500).json({ message: 'Erro ao montar a lista de separação' });
-    }
-  },
-
-  // GET /indicadores/previsao?dias=30|60|90[&pos_id=]
-  // Necessidade de cada insumo nos próximos dias, somando:
-  //  - coletas já agendadas (as atrasadas contam para hoje);
-  //  - ciclos futuros das prescrições de uso contínuo, até o vencimento;
-  //  - prescrições autorizadas que ainda esperam a 1ª retirada;
-  //  - média diária das retiradas avulsas dos últimos 90 dias x dias.
-  // Compara com o estoque e estima a data em que o insumo acaba.
-  async previsao(req, res) {
-    try {
-      const dias = Number(req.query.dias ?? 30);
-      if (!HORIZONTES_PREVISAO.includes(dias)) {
-        return res.status(400).json({ message: `Escolha ${HORIZONTES_PREVISAO.join(', ')} dias.` });
-      }
-      const { pos_id, erro } = postoDoFiltro(req);
-      if (erro) return res.status(400).json({ message: erro });
-
-      const hoje = dataHojeBrasil();
-      const fim = somarDias(hoje, dias - 1);
-      const doPosto = (coluna) => (qb) => { if (pos_id !== undefined) qb.where(coluna, pos_id); };
-
-      const insumos = await knex('insumo as ins')
-        .leftJoin('postosdesaude as pos', 'pos.pos_id', 'ins.pos_id')
-        .modify(doPosto('ins.pos_id'))
-        .select('ins.ins_id', 'ins.ins_nome', 'ins.ins_marca', 'ins.ins_quantidade', 'ins.pos_id', 'pos.pos_nome');
-
-      // consumo previsto por insumo: Map ins_id -> Map data -> quantidade
-      const eventos = new Map();
-      const partes = new Map(); // ins_id -> { agendado, recorrente, a_agendar, avulso }
-      const parte = (ins_id) => {
-        const id = Number(ins_id);
-        if (!partes.has(id)) partes.set(id, { agendado: 0, recorrente: 0, a_agendar: 0, avulso: 0 });
-        return partes.get(id);
-      };
-      const somar = (ins_id, data, qtd, tipo) => {
-        const id = Number(ins_id);
-        const porData = eventos.get(id) ?? new Map();
-        porData.set(data, (porData.get(data) ?? 0) + qtd);
-        eventos.set(id, porData);
-        parte(id)[tipo] += qtd;
-      };
-
-      // 1) coletas agendadas até o fim do período
-      const agendadas = await knex('coleta as col')
-        .join('solicitacao as sol', 'sol.sol_id', 'col.sol_id')
-        .where('sol.sol_status', 'agendado')
-        .where('sol.sol_data_de_coleta', '<=', fim)
-        .modify(doPosto('sol.pos_id'))
-        .select('col.ins_id', 'col.quantidade', 'sol.sol_data_de_coleta');
-      for (const a of agendadas) {
-        const data = isoData(a.sol_data_de_coleta);
-        somar(a.ins_id, data < hoje ? hoje : data, Number(a.quantidade ?? 0), 'agendado');
-      }
-
-      // 2) e 3) prescrições autorizadas e válidas: ciclos futuros e 1ª retirada
-      const prescricoes = await knex('solicitacao')
-        .where('sol_status', 'Autorizado')
-        .where((w) => w.whereNull('sol_data_vencimento').orWhere('sol_data_vencimento', '>=', hoje))
-        .modify(doPosto('pos_id'))
-        .select('sol_id', 'sol_periodicidade_dias', 'sol_data_vencimento');
-      if (prescricoes.length) {
-        const ids = prescricoes.map((p) => p.sol_id);
-        const itens = await itensDasPrescricoes(ids);
-        const ciclos = await knex('solicitacao')
-          .whereIn('sol_origem_id', ids)
-          .whereIn('sol_status', ['agendado', 'concluido'])
-          .select('sol_origem_id', 'sol_status', 'sol_data_de_coleta');
-        for (const p of prescricoes) {
-          const dela = ciclos.filter((c) => Number(c.sol_origem_id) === Number(p.sol_id));
-          const lista = itens.get(Number(p.sol_id)) ?? [];
-          const periodo = Number(p.sol_periodicidade_dias) || null;
-          const vencimento = isoData(p.sol_data_vencimento);
-          const limite = vencimento && vencimento < fim ? vencimento : fim;
-
-          if (!dela.length) {
-            // autorizada, ainda sem agendamento: a 1ª retirada vem logo
-            for (const i of lista) somar(i.ins_id, hoje, i.quantidade, 'a_agendar');
-            if (!periodo) continue;
-          } else if (!periodo) {
-            continue; // retirada única já agendada (conta no item 1) ou feita
-          }
-
-          // próximo ciclo: depois do agendado em aberto ou da última retirada
-          const datas = dela.map((c) => isoData(c.sol_data_de_coleta)).filter(Boolean).sort();
-          let proxima = datas.length ? somarDias(datas.at(-1), periodo) : somarDias(hoje, periodo);
-          if (proxima < hoje) proxima = hoje;
-          while (proxima <= limite) {
-            for (const i of lista) somar(i.ins_id, proxima, i.quantidade, 'recorrente');
-            proxima = somarDias(proxima, periodo);
-          }
-        }
-      }
-
-      // 4) retiradas avulsas (sem uso contínuo) concluídas nos últimos 90 dias
-      const inicioHistorico = somarDias(hoje, -DIAS_HISTORICO_AVULSAS);
-      const avulsas = await knex('coleta as col')
-        .join('solicitacao as sol', 'sol.sol_id', 'col.sol_id')
-        .leftJoin('solicitacao as ori', 'ori.sol_id', 'sol.sol_origem_id')
-        .where('sol.sol_status', 'concluido')
-        .where('sol.sol_data_de_coleta', '>=', inicioHistorico)
-        .where('sol.sol_data_de_coleta', '<', hoje)
-        .where((w) => w.whereNull('ori.sol_periodicidade_dias').orWhere('ori.sol_periodicidade_dias', '<=', 0))
-        .modify(doPosto('sol.pos_id'))
-        .groupBy('col.ins_id')
-        .select('col.ins_id')
-        .sum({ total: 'col.quantidade' });
-      const mediaDiaria = new Map(avulsas.map((a) => [Number(a.ins_id), Number(a.total ?? 0) / DIAS_HISTORICO_AVULSAS]));
-
-      const saida = insumos.map((ins) => {
-        const id = Number(ins.ins_id);
-        const estoque = Math.max(0, Number(ins.ins_quantidade ?? 0));
-        const media = mediaDiaria.get(id) ?? 0;
-        const p = { ...parte(id), avulso: Math.round(media * dias) };
-        const necessidade = p.agendado + p.recorrente + p.a_agendar + p.avulso;
-
-        // dia a dia, quando o consumo acumulado passa do estoque
-        let acaba_em = null;
-        const porData = eventos.get(id) ?? new Map();
-        let acumulado = 0;
-        for (let d = 0; d < dias; d++) {
-          const data = somarDias(hoje, d);
-          acumulado += (porData.get(data) ?? 0) + media;
-          if (acumulado > estoque + 1e-9) { acaba_em = data; break; }
-        }
-
-        return {
-          ins_id: id,
-          ins_nome: ins.ins_nome,
-          ins_marca: ins.ins_marca ?? null,
-          pos_id: ins.pos_id,
-          pos_nome: ins.pos_nome ?? null,
-          estoque,
-          ...p,
-          necessidade,
-          saldo: estoque - necessidade,
-          falta: Math.max(0, necessidade - estoque),
-          acaba_em,
-        };
-      });
-
-      saida.sort((a, b) =>
-        b.falta - a.falta
-        || (a.acaba_em ?? '9999').localeCompare(b.acaba_em ?? '9999')
-        || a.saldo - b.saldo
-        || String(a.ins_nome).localeCompare(String(b.ins_nome), 'pt-BR'));
-
-      return res.status(200).json({
-        dias, de: hoje, ate: fim, historico_dias: DIAS_HISTORICO_AVULSAS, insumos: saida,
-      });
-    } catch (error) {
-      console.error('Erro ao calcular a previsão de demanda:', error);
-      return res.status(500).json({ message: 'Erro ao calcular a previsão de demanda' });
     }
   },
 };

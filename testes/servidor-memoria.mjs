@@ -152,7 +152,7 @@ await knex('solicitacao_item').insert([
   { sol_id: continua, ins_id: curativo.ins_id, sit_quantidade: 5 },
 ]);
 
-// etapa 5: retiradas avulsas dos últimos meses (média da previsão), um
+// etapa 5: retiradas avulsas dos últimos meses (histórico), um
 // paciente que avisou que não vai amanhã e o estoque da UBS Vila Nova
 const diasAtras = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 for (const [n, qtd] of [[12, 30], [35, 25], [61, 35], [80, 20]]) {

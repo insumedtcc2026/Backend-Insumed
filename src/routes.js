@@ -91,8 +91,6 @@ routes.get('/painel/admin', authorization, autorizarAdmin, painelControllers.pai
 // Home do autorizador
 routes.get('/painel/autorizador', authorization, autorizarAut, autorizadorControllers.painelAutorizador);
 // atividades da unidade (histórico geral de quem fez o quê)
-// previsão de demanda por insumo (30, 60 ou 90 dias)
-routes.get('/indicadores/previsao', authorization, autorizarAdmin, gestaoControllers.previsao);
 
 routes.get('/atividades', authorization, autorizarAdmin, painelControllers.atividades);
 
