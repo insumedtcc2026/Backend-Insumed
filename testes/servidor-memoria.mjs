@@ -41,7 +41,7 @@ db.public.none(`
     sol_prescricao_tipo text, sol_observacao text, sol_status text, sol_insumo_quant int,
     sol_data_solicitacao timestamptz default now(), sol_data_vencimento date, sol_motivo_nao_autorizado text,
     sol_motivo_reenvio text, sol_data_de_coleta date, sol_protocolo text);
-  create table coleta (col_id serial primary key, sol_id int, ins_id int, quantidade int);
+  create table coleta (sol_id int, ins_id int, quantidade int);
 `);
 db.public.none(
   fs.readFileSync(path.join(BACKEND, 'database/migracoes/2026-10-13_melhorias_insumed.sql'), 'utf8')

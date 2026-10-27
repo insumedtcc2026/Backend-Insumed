@@ -47,7 +47,7 @@ export default {
         ? await knex('coleta as col')
           .leftJoin('insumo as ins', 'ins.ins_id', 'col.ins_id')
           .whereIn('col.sol_id', coletas.map((c) => c.sol_id))
-          .orderBy('col.col_id')
+          .orderBy(['col.sol_id', 'ins.ins_nome'])
           .select('col.sol_id', 'col.ins_id', 'col.quantidade', 'ins.ins_nome', 'ins.ins_marca')
         : [];
       const itensDe = new Map();
