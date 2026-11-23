@@ -5,6 +5,5 @@ export default (req, res, next) => {
             error: "Acesso restrito ao administrador universal"
         });
     }
-
     return next();
 };

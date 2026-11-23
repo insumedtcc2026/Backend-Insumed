@@ -1,597 +1,1288 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Documentação da API - Sistema de Agendamentos e Coletas</title>
-    <style>
-        /* Variáveis de Cores Globais */
-        :root {
-            --bg-color: #f8fafc;
-            --card-bg: #ffffff;
-            --text-main: #1e293b;
-            --text-muted: #64748b;
-            --primary: #0284c7;
-            --get-color: #10b981;
-            --post-color: #eab308;
-            --patch-color: #8b5cf6;
-            --error-color: #ef4444;
-            --border-color: #e2e8f0;
-            --code-bg: #1e1e2e;
-        }
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Referência técnica da API INSUMED. Endpoints, autenticação, permissões e regras de negócio, organizada conforme routes.js.">
+<title>INSUMED API — Documentação técnica</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="favicon.png">
+<style>
+:root{--navy:#102b4e;
+--navy2:#173d68;
+--blue:#2475c7;
+--blue2:#eaf3fc;
+--ink:#19283b;
+--muted:#64748b;
+--bg:#f4f7fb;
+--paper:#fff;
+--line:#e1e8f0;
+--green:#12805c;
+--amber:#a66a09;
+--purple:#7355b4;
+--red:#bd4545;
+--shadow:0 8px 28px rgba(18,43,78,.07);
+--radius:16px}
 
-        /* Reset Básico */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;
+background:var(--bg);
+color:var(--ink);
+font:15px/1.58 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+a{color:inherit}
+button,input,select{font:inherit}
+.top{background:linear-gradient(118deg,#102846,#174c7c 72%,#2676b4);
+color:white;
+padding:30px max(22px,calc((100vw - 1440px)/2));
+position:relative;
+overflow:hidden}
+.top:after{content:"";
+position:absolute;
+width:440px;
+height:440px;
+border:1px solid #ffffff20;
+border-radius:50%;
+right:-140px;
+top:-250px;
+box-shadow:0 0 0 40px #ffffff08,0 0 0 80px #ffffff06}
+.brand{display:flex;
+align-items:center;
+gap:12px;
+position:relative;
+z-index:1}
+.brand-logo{width:48px;height:48px;object-fit:contain;display:block;flex:0 0 48px;border-radius:12px;background:#fff;padding:2px;box-shadow:0 4px 15px #081b302c}
+.mark{width:44px;
+height:44px;
+border-radius:13px;
+background:white;
+color:var(--blue);
+display:grid;
+place-items:center;
+font-weight:900;
+font-size:20px;
+box-shadow:0 4px 15px #081b302c}
+.brand small{display:block;
+color:#c7d9ec;
+font-size:12px;
+letter-spacing:.08em;
+text-transform:uppercase}
+.hero{position:relative;
+z-index:1;
+max-width:880px;
+padding:28px 0 18px}
+.eyebrow{font-size:12px;
+text-transform:uppercase;
+letter-spacing:.14em;
+color:#c6ddf5;
+font-weight:800}
+.hero h1{font-size:clamp(32px,5vw,48px);
+line-height:1.08;
+margin:8px 0 12px;
+letter-spacing:-.04em}
+.hero p{color:#d6e5f4;
+max-width:780px;
+margin:0;
+font-size:16px}
+.hero-meta{display:flex;
+gap:9px;
+flex-wrap:wrap;
+margin-top:22px}
+.chip{border:1px solid #ffffff32;
+background:#ffffff12;
+border-radius:99px;
+padding:6px 11px;
+font-size:12px;
+color:#f1f7ff}
+.layout{max-width:1440px;
+margin:28px auto;
+padding:0 20px 65px;
+display:grid;
+grid-template-columns:275px minmax(0,1fr);
+gap:26px}
+.side{position:sticky;
+top:18px;
+align-self:start;
+max-height:calc(100vh - 36px);
+overflow:auto;
+background:var(--paper);
+border:1px solid var(--line);
+border-radius:var(--radius);
+padding:17px;
+box-shadow:var(--shadow)}
+.side-title{font-size:11px;
+font-weight:800;
+color:var(--muted);
+letter-spacing:.12em;
+text-transform:uppercase;
+margin:3px 0 12px}
+.nav{display:flex;
+flex-direction:column;
+gap:3px}
+.nav a{text-decoration:none;
+color:#40536a;
+font-size:13px;
+padding:8px 10px;
+border-radius:9px;
+display:flex;
+justify-content:space-between;
+gap:8px}
+.nav a:hover,.nav a.active{background:var(--blue2);
+color:#175b9d}
+.nav b{font-size:11px;
+color:#7890a7}
+.main{min-width:0}
+.toolbar{background:var(--paper);
+border:1px solid var(--line);
+border-radius:var(--radius);
+padding:15px;
+display:grid;
+grid-template-columns:minmax(200px,1fr) 170px 170px;
+gap:10px;
+box-shadow:var(--shadow)}
+.searchbox{position:relative}
+.searchbox span{position:absolute;
+left:13px;
+top:10px;
+color:#8092a8}
+.searchbox input{padding-left:38px}
+.toolbar input,.toolbar select{width:100%;
+border:1px solid var(--line);
+background:#fff;
+border-radius:10px;
+padding:10px 12px;
+color:var(--ink);
+outline:none}
+.toolbar input:focus,.toolbar select:focus{border-color:#75a9dc;
+box-shadow:0 0 0 3px #2475c719}
+.stats{display:grid;
+grid-template-columns:repeat(6,1fr);
+gap:10px;
+margin:15px 0 22px}
+.stat{background:var(--paper);
+border:1px solid var(--line);
+border-radius:13px;
+padding:13px 14px}
+.stat strong{display:block;
+font-size:23px;
+line-height:1.2;
+letter-spacing:-.03em}
+.stat span{font-size:11px;
+color:var(--muted);
+text-transform:uppercase;
+letter-spacing:.08em}
+.intro,.group{background:var(--paper);
+border:1px solid var(--line);
+border-radius:var(--radius);
+padding:21px;
+margin:0 0 17px;
+box-shadow:var(--shadow)}
+.intro h2,.group h2{margin:0;
+font-size:21px;
+letter-spacing:-.025em}
+.intro p{color:#53657b;
+margin:8px 0}
+.info-grid{display:grid;
+grid-template-columns:repeat(3,1fr);
+gap:10px;
+margin-top:15px}
+.info{border:1px solid var(--line);
+background:#f9fbfd;
+padding:12px;
+border-radius:12px}
+.info b{font-size:12px;
+display:block;
+margin-bottom:4px}
+.info span{font-size:12px;
+color:var(--muted)}
+.group{scroll-margin-top:18px}
+.grouphead{display:flex;
+justify-content:space-between;
+align-items:flex-start;
+gap:12px;
+margin-bottom:14px}
+.grouphead p{font-size:13px;
+color:var(--muted);
+margin:5px 0 0}
+.count{background:#eef3f8;
+border-radius:99px;
+color:#52667c;
+font-size:11px;
+font-weight:800;
+padding:5px 9px;
+white-space:nowrap}
+.endpoint{border:1px solid var(--line);
+border-radius:12px;
+margin:10px 0;
+overflow:hidden;
+background:white}
+.endpoint[hidden]{display:none}
+.summary{width:100%;
+display:grid;
+grid-template-columns:78px minmax(0,1fr) auto;
+align-items:center;
+gap:12px;
+padding:13px 14px;
+background:white;
+border:0;
+text-align:left;
+cursor:pointer;
+color:inherit}
+.summary:hover{background:#fbfdff}
+.method{display:inline-flex;
+justify-content:center;
+align-items:center;
+min-width:64px;
+padding:5px 8px;
+border-radius:7px;
+font-weight:900;
+font-size:11px;
+letter-spacing:.04em}
+.GET{background:#e4f5ee;
+color:#08764e}
+.POST{background:#fff2d9;
+color:#976006}
+.PUT{background:#e7efff;
+color:#315da7}
+.PATCH{background:#eee9fb;
+color:#6745a8}
+.DELETE{background:#fde9e9;
+color:#b23f3f}
+.ep-title{font-size:14px;
+font-weight:750;
+display:block}
+.path{display:block;
+font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+font-size:12px;
+color:#53677f;
+margin-top:2px;
+overflow-wrap:anywhere}
+.full-url{display:block;
+font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+font-size:10px;
+color:#2475c7;
+margin-top:4px;
+overflow-wrap:anywhere}
+.ep-access{font-size:11px;
+color:#718198;
+text-align:right;
+max-width:175px}
+.chev{color:#8da0b4;
+font-size:18px}
+.details{border-top:1px solid var(--line);
+padding:16px 18px 18px;
+background:#fcfdff}
+.details p{margin:0 0 12px;
+color:#465970;
+font-size:13px}
+.detailgrid{display:grid;
+grid-template-columns:1fr 1fr;
+gap:10px}
+.detailbox{background:#fff;
+border:1px solid var(--line);
+border-radius:10px;
+padding:12px}
+.detailbox h4{font-size:11px;
+text-transform:uppercase;
+letter-spacing:.09em;
+color:#6a7e94;
+margin:0 0 6px}
+.detailbox p{margin:0;
+font-size:12px;
+color:#445971;
+white-space:pre-wrap}
+.ep-actions{display:flex;
+justify-content:flex-end;
+margin-top:11px}
+.copy{border:1px solid #d6e1ed;
+background:#fff;
+color:#315b85;
+border-radius:8px;
+padding:7px 10px;
+font-size:11px;
+font-weight:700;
+cursor:pointer}
+.copy:hover{background:#eff6fd}
+.note{border-left:3px solid #dfaa45;
+padding:9px 12px;
+background:#fff8e8;
+color:#76561c;
+border-radius:0 9px 9px 0;
+font-size:12px;
+margin-top:12px}
+.footer{text-align:center;
+color:#7c8da1;
+font-size:12px;
+padding:20px}
+.empty{background:white;
+border:1px dashed #ccd8e5;
+border-radius:12px;
+padding:28px;
+text-align:center;
+color:var(--muted)}
+.hide{display:none!important}
+.methodlegend{display:flex;
+gap:8px;
+flex-wrap:wrap;
+margin-top:10px}
+.methodlegend span{font-size:11px;
+display:inline-flex;
+align-items:center;
+gap:5px;
+color:var(--muted)}
+.dot{width:8px;
+height:8px;
+border-radius:50%;
+display:inline-block}
 
-        body {
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            line-height: 1.6;
-        }
+@media(max-width:950px){.layout{grid-template-columns:1fr}
+.side{position:relative;
+top:auto;
+max-height:none}
+.nav{display:grid;
+grid-template-columns:repeat(2,1fr)}
+.toolbar{grid-template-columns:1fr 1fr}
+.searchbox{grid-column:1/-1}
+}
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
+@media(max-width:600px){.top{padding:24px 18px}
+.layout{padding:0 12px 40px;
+margin-top:16px;
+gap:14px}
+.toolbar{grid-template-columns:1fr}
+.searchbox{grid-column:auto}
+.stats{grid-template-columns:repeat(2,1fr)}
+.stat:last-child{grid-column:span 2}
+.info-grid{grid-template-columns:1fr}
+.summary{grid-template-columns:65px minmax(0,1fr) 14px;
+gap:8px;
+padding:12px}
+.ep-access{display:none}
+.detailgrid{grid-template-columns:1fr}
+.intro,.group{padding:16px}
+.nav{grid-template-columns:1fr 1fr}
+}
 
-        /* Header */
-        .main-header {
-            background-color: #0f172a;
-            color: #ffffff;
-            padding: 40px 0;
-            border-bottom: 4px solid var(--primary);
-        }
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}
+}
 
-        .main-header h1 {
-            font-size: 2.5rem;
-            font-weight: 700;
-        }
-
-        .main-header h1 span {
-            font-size: 1rem;
-            background-color: var(--primary);
-            padding: 4px 8px;
-            border-radius: 4px;
-            vertical-align: middle;
-            margin-left: 10px;
-        }
-
-        .main-header p {
-            color: #94a3b8;
-            margin-top: 5px;
-        }
-
-        /* Grid Layout */
-        .content-grid {
-            display: grid;
-            grid-template-columns: 280px 1fr;
-            gap: 40px;
-            margin-top: 40px;
-            margin-bottom: 60px;
-        }
-
-        /* Sidebar Navigation */
-        .sidebar {
-            position: sticky;
-            top: 20px;
-            height: calc(100vh - 40px);
-            overflow-y: auto;
-        }
-
-        .sidebar h3 {
-            font-size: 1rem;
-            text-transform: uppercase;
-            color: var(--text-muted);
-            letter-spacing: 0.05em;
-            margin-bottom: 10px;
-            margin-top: 20px;
-        }
-        
-        .sidebar h3:first-child {
-            margin-top: 0;
-        }
-
-        .sidebar ul {
-            list-style: none;
-            margin-bottom: 15px;
-        }
-
-        .sidebar ul li a {
-            display: block;
-            padding: 8px 15px;
-            color: var(--text-main);
-            text-decoration: none;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 0.95rem;
-            transition: background 0.2s ease;
-        }
-
-        .sidebar ul li a:hover {
-            background-color: var(--border-color);
-            color: var(--primary);
-        }
-
-        /* Cards dos Endpoints */
-        .endpoint-card {
-            background-color: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 25px;
-            margin-bottom: 30px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-        }
-
-        .endpoint-header {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            padding: 10px 15px;
-            border-radius: 6px;
-            font-weight: bold;
-            font-family: monospace;
-            font-size: 1.2rem;
-            margin-bottom: 15px;
-        }
-
-        .endpoint-header .method {
-            color: white;
-            padding: 4px 12px;
-            border-radius: 4px;
-            font-size: 0.9rem;
-        }
-
-        /* Estilos de Métodos HTTP */
-        .endpoint-header.get { background-color: rgba(16, 185, 129, 0.1); color: var(--get-color); }
-        .endpoint-header.get .method { background-color: var(--get-color); }
-
-        .endpoint-header.post { background-color: rgba(234, 179, 8, 0.1); color: var(--post-color); }
-        .endpoint-header.post .method { background-color: var(--post-color); }
-
-        .endpoint-header.patch { background-color: rgba(139, 92, 246, 0.1); color: var(--patch-color); }
-        .endpoint-header.patch .method { background-color: var(--patch-color); }
-
-        .description {
-            color: var(--text-muted);
-            margin-bottom: 20px;
-            font-size: 1.05rem;
-        }
-
-        h4 {
-            margin: 20px 0 10px 0;
-            font-size: 1rem;
-            color: var(--text-main);
-        }
-
-        /* Caixas de Resposta e Código */
-        .response-box {
-            border-left: 4px solid;
-            padding: 15px;
-            margin-bottom: 15px;
-            border-radius: 0 6px 6px 0;
-        }
-
-        .response-box.success {
-            background-color: #f0fdf4;
-            border-color: var(--get-color);
-            color: #166534;
-        }
-
-        .response-box.warning {
-            background-color: #fefce8;
-            border-color: var(--post-color);
-            color: #854d0e;
-        }
-
-        .response-box.error {
-            background-color: #fef2f2;
-            border-color: var(--error-color);
-            color: #991b1b;
-        }
-
-        pre {
-            background-color: var(--code-bg);
-            color: #cdd6f4;
-            padding: 15px;
-            border-radius: 6px;
-            overflow-x: auto;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 0.9rem;
-            margin-top: 10px;
-        }
-
-        /* Footer */
-        .main-footer {
-            text-align: center;
-            padding: 30px 0;
-            color: var(--text-muted);
-            border-top: 1px solid var(--border-color);
-            font-size: 0.9rem;
-        }
-
-        /* Responsividade */
-        @media (max-width: 768px) {
-            .content-grid {
-                grid-template-columns: 1fr;
-            }
-            .sidebar {
-                position: relative;
-                top: 0;
-                height: auto;
-            }
-        }
-    </style>
+</style>
 </head>
 <body>
+<header class="top">
+ <div class="brand"><img class="brand-logo" src="data:image/png;base64,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" alt="Logotipo INSUMED"><div><strong>INSUMED API</strong><small>Referência técnica do backend</small></div></div>
+ <div class="hero"><div class="eyebrow">Documentação dos serviços</div><h1>INSUMED API</h1><p>Referência técnica dos endpoints do sistema de gerenciamento e distribuição de insumos médicos. Rotas agrupadas por perfil e módulo.</p><div class="hero-meta"><span class="chip">Backend INSUMED</span><span class="chip">86 rotas declaradas</span><span class="chip">JWT · Perfis · Regras de negócio</span></div></div>
+</header>
+<div class="layout">
+ <aside class="side"><div class="side-title">Navegação</div><nav id="nav" class="nav"></nav><div style="border-top:1px solid var(--line);margin:15px 0;padding-top:13px"><div class="side-title">Nota da versão</div><p style="font-size:11px;color:var(--muted);margin:0">Documento reconstruído a partir dos arquivos-fonte.</p></div></aside>
+ <main class="main">
+  <section class="toolbar" aria-label="Filtros da documentação">
+    <div class="searchbox">
+    <input id="q" type="search" placeholder="⌕ Buscar endpoint, método, descrição ou permissão…" autocomplete="off"></div>
 
-    <header class="main-header">
-        <div class="container">
-            <h1>Insumed API <span>v1.0.0</span></h1>
-            <p>Documentação oficial das rotas e controladores do sistema de Agendamentos e Coletas.</p>
-        </div>
-    </header>
-
-    <main class="container content-grid">
-        <aside class="sidebar">
-            <h3>Autenticação</h3>
-            <ul>
-                <li><a href="#post-login">POST /login</a></li>
-            </ul>
-
-            <h3>Pacientes</h3>
-            <ul>
-                <li><a href="#get-pacientes">GET /pacientes</a></li>
-                <li><a href="#post-pacientes">POST /pacientes</a></li>
-                <li><a href="#get-pacientes-buscar">GET /pacientes/buscar</a></li>
-            </ul>
-
-            <h3>Agendamentos</h3>
-            <ul>
-                <li><a href="#get-agendamentos">GET /agendamentos</a></li>
-                <li><a href="#post-agendamentos">POST /agendamentos</a></li>
-                <li><a href="#patch-agendamentos-concluir">PATCH /agendamentos/:id/concluir</a></li>
-                <li><a href="#patch-agendamentos-cancelar">PATCH /agendamentos/:id/cancelar</a></li>
-                <li><a href="#get-agendamentos-meus">GET /agendamentos/meus</a></li>
-                <li><a href="#get-agendamentos-proximo">GET /agendamentos/proximo</a></li>
-            </ul>
-
-            <h3>Solicitações</h3>
-            <ul>
-                <li><a href="#post-solicitacoes">POST /solicitacoes</a></li>
-                <li><a href="#get-solicitacoes-pendentes">GET /solicitacoes/pendentes</a></li>
-                <li><a href="#get-solicitacoes-meus">GET /solicitacoes/meus</a></li>
-            </ul>
-
-            <h3>Administradores</h3>
-            <ul>
-                <li><a href="#get-administradores">GET /administradores</a></li>
-                <li><a href="#post-administradores">POST /administradores</a></li>
-            </ul>
-
-            <h3>Autorizadores</h3>
-            <ul>
-                <li><a href="#get-autorizadores">GET /autorizadores</a></li>
-                <li><a href="#post-autorizadores">POST /autorizadores</a></li>
-            </ul>
-
-            <h3>Insumos & Postos</h3>
-            <ul>
-                <li><a href="#get-insumos-buscar">GET /insumos/buscar</a></li>
-                <li><a href="#get-postos">GET /postos</a></li>
-            </ul>
-        </aside>
-
-        <section class="docs-body">
-            
-            <!-- 1. AUTENTICAÇÃO -->
-            <article id="post-login" class="endpoint-card">
-                <div class="endpoint-header post">
-                    <span class="method">POST</span>
-                    <span class="path">/login</span>
-                </div>
-                <p class="description">Realiza a autenticação verificando, na ordem, as tabelas pacientes, autorizador e administrador (Login Unificado).</p>
-                
-                <h4>Corpo da Requisição (JSON):</h4>
-                <pre><code>{
-  "email": "usuario@email.com",
-  "senha": "suasenha123"
-}</code></pre>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong> - Retorna o Token JWT e dados do usuário logado.
-                </div>
-                <div class="response-box error">
-                    <strong>400 Bad Request</strong>
-                    <pre><code>{ "erro": "E-mail e senha são obrigatórios" }</code></pre>
-                </div>
-                <div class="response-box error">
-                    <strong>401 Unauthorized</strong>
-                    <pre><code>{ "msg": "E-mail ou senha inválidos" }</code></pre>
-                </div>
-            </article>
-
-            <!-- 2. PACIENTES -->
-            <article id="get-pacientes" class="endpoint-card">
-                <div class="endpoint-header get">
-                    <span class="method">GET</span>
-                    <span class="path">/pacientes</span>
-                </div>
-                <p class="description">Retorna todos os pacientes cadastrados no sistema.</p>
-                
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong> - Array de objetos com todos os dados da tabela pacientes.
-                </div>
-            </article>
-
-            <article id="post-pacientes" class="endpoint-card">
-                <div class="endpoint-header post">
-                    <span class="method">POST</span>
-                    <span class="path">/pacientes</span>
-                </div>
-                <p class="description">Cria um novo paciente. O sistema gera automaticamente um avatar baseado nas iniciais do nome.</p>
-                
-                <h4>Corpo da Requisição (JSON):</h4>
-                <pre><code>{
-  "nome": "João da Silva",
-  "email": "joao@email.com",
-  "telefone": "(24) 99999-9999",
-  "cpf": "123.456.789-00",
-  "data_nasc": "1990-01-01",
-  "sexo": "Masculino", 
-  "endereco": "Rua A, 123",
-  "raca": "Branca",
-  "senha": "senha123",
-  "cep": "12345-678"
-}</code></pre>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>201 Created</strong>
-                    <pre><code>{ "msg": "Usuário cadastrado com êxito" }</code></pre>
-                </div>
-                <div class="response-box error">
-                    <strong>400 Bad Request</strong> - Erros de validação (Telefone, E-mail, CEP, CPF inválidos ou e-mail já cadastrado).
-                </div>
-            </article>
-
-            <article id="get-pacientes-buscar" class="endpoint-card">
-                <div class="endpoint-header get">
-                    <span class="method">GET</span>
-                    <span class="path">/pacientes/buscar</span>
-                </div>
-                <p class="description">Busca pacientes pelo CPF. Formatação ignorada na busca.</p>
-                
-                <h4>Query Params:</h4>
-                <pre><code>?cpf=12345678900</code></pre>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong> - Array contendo até 10 resultados.
-                    <pre><code>[
-  { 
-    "pac_id": 1, 
-    "pac_nome": "João", 
-    "pac_cpf": "12345678900", 
-    "pac_telefone": "..." 
+    <select id="method"><option value="">Todos os métodos</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+    <select id="groupFilter">
+    <option value="">Todos os módulos</option></select>
+</section>
+  <section class="stats" id="stats"></section>
+  <section class="intro"><h2>Sobre esta documentação</h2><p>Esta referência descreve as rotas registradas, os middlewares aplicados e as regras de negócio identificadas nos controllers/utilitários.</p><div class="info-grid"><div class="info"><b>Base URL de produção</b><span><code>https://backend-insumed-lhac.vercel.app</code>. O botão “Copiar método + URL” copia a URL de hospedagem da API. Exemplo, <code>GET https://backend-insumed-lhac.vercel.app/pacientes</code>.</span></div><div class="info"><b>Formato</b><span>JSON UTF-8 para operações comuns. Arquivos de prescrição podem ser entregues como conteúdo binário com Content-Type próprio.</span></div>
+<div class="info"><b>Autenticação</b><span>JWT via <code>Authorization: Bearer &lt;token&gt;</code>, exceto rotas explicitamente públicas e a tarefa protegida por CRON_SECRET.</span></div></div><div class="methodlegend"><span><i class="dot" style="background:#12805c"></i> GET</span><span><i class="dot" style="background:#d49a2e"></i> POST</span><span><i class="dot" style="background:#5278c4"></i> PUT</span><span><i class="dot" style="background:#8769c8"></i> PATCH</span><span><i class="dot" style="background:#c75c5c"></i> DELETE</span></div></section>
+  <div id="groups"></div>
+  <div class="footer">INSUMED · Documentação técnica reconstruída do código-fonte recebido · Consulte o backend para mudanças posteriores.</div>
+ </main>
+</div>
+<script>
+const endpoints = [
+  {
+    "group": "Início e autenticação",
+    "method": "GET",
+    "path": "/",
+    "title": "Verificar a disponibilidade da API",
+    "access": "Público",
+    "purpose": "Endpoint raiz servido por raizControllers.index.",
+    "inputs": "Sem parâmetros.",
+    "rules": "A resposta exata é definida em raizControllers; conferir o controller para o payload da implantação."
+  },
+  {
+    "group": "Início e autenticação",
+    "method": "POST",
+    "path": "/login",
+    "title": "Autenticação unificada",
+    "access": "Público; limite de tentativas",
+    "purpose": "Autentica contas ADMIN, AUTORIZADOR ou PACIENTE e emite JWT.",
+    "inputs": "JSON: login ou email, senha; perfil é opcional quando a conta pode corresponder a mais de um perfil.",
+    "rules": "JWT assinado com ACCESS_TOKEN_SECRET, algoritmo HS256 e validade de 7 dias. Erros conhecidos: 400 para dados ausentes/identificador inválido, 401 credenciais inválidas, 403 conta inativa, 429 excesso de tentativas e 500 se segredo ausente/configuração interna."
+  },
+  {
+    "group": "Início e autenticação",
+    "method": "GET",
+    "path": "/validar",
+    "title": "Validar token da sessão",
+    "access": "JWT obrigatório; qualquer perfil autenticado",
+    "purpose": "Confirma a validade do token e devolve a sessão decodificada.",
+    "inputs": "Header: Authorization: Bearer <token>.",
+    "rules": "Resposta 200 com message \"Token válido\" e session. Falhas de autenticação são tratadas pelo middleware authorization."
+  },
+  {
+    "group": "Paciente",
+    "method": "POST",
+    "path": "/pacientes",
+    "title": "Cadastrar paciente",
+    "access": "Público",
+    "purpose": "Cria a conta de paciente.",
+    "inputs": "JSON: nome, email, telefone, cpf, data_nasc, sexo, endereco, raca, senha, confirmacao_senha, cep.",
+    "rules": "Valida dados; e-mail e CPF duplicados retornam 409; cadastro bem-sucedido retorna 201. A senha é armazenada com bcrypt e o avatar é derivado das iniciais."
+  },
+  {
+    "group": "Início e autenticação",
+    "method": "POST",
+    "path": "/administrador",
+    "title": "Cadastrar administrador por convite",
+    "access": "Público; convite válido obrigatório",
+    "purpose": "Conclui o cadastro de administrador a partir de convite.",
+    "inputs": "JSON definido por cadastrarComConvite(\"ADMIN\", req.body); enviar os dados de cadastro e o código de convite exigidos pelo fluxo.",
+    "rules": "O controller delega validações e status a cadastrarComConvite. Não é cadastro público irrestrito."
+  },
+  {
+    "group": "Início e autenticação",
+    "method": "POST",
+    "path": "/autorizador",
+    "title": "Cadastrar autorizador por convite",
+    "access": "Público; convite válido obrigatório",
+    "purpose": "Conclui o cadastro de autorizador a partir de convite.",
+    "inputs": "JSON definido por cadastrarComConvite(\"AUTORIZADOR\", req.body); enviar os dados de cadastro e o código de convite exigidos pelo fluxo.",
+    "rules": "O controller delega validações e status a cadastrarComConvite. Não é cadastro público irrestrito."
+  },
+  {
+    "group": "Início e autenticação",
+    "method": "GET",
+    "path": "/convites/info",
+    "title": "Consultar convite para cadastro",
+    "access": "Público",
+    "purpose": "Retorna informações de perfil e unidade associadas ao convite, para preencher o formulário.",
+    "inputs": "Query: codigo.",
+    "rules": "Convite inexistente retorna 404; convite expirado, usado ou inválido pode retornar 410 com situação. Não exige JWT."
+  },
+  {
+    "group": "Início e autenticação",
+    "method": "GET",
+    "path": "/postos",
+    "title": "Listar postos de coleta",
+    "access": "Público",
+    "purpose": "Retorna a lista de postos de coleta cadastrados.",
+    "inputs": "Sem parâmetros.",
+    "rules": "Handler: postocoleta.listar. Estrutura do payload definida pelo controller."
+  },
+  {
+    "group": "Início e autenticação",
+    "method": "GET",
+    "path": "/postos/:id",
+    "title": "Consultar posto por identificador",
+    "access": "Público",
+    "purpose": "Retorna os dados do posto indicado.",
+    "inputs": "Path: id (identificador inteiro positivo).",
+    "rules": "Handler: postocoleta.listarporid. A rota usa o caminho parametrizado; o controller define o status de não encontrado."
+  },
+  {
+    "group": "Paciente",
+    "method": "PUT",
+    "path": "/pacientes/perfil",
+    "title": "Atualizar um campo do próprio perfil",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Atualiza um único campo permitido no perfil do paciente autenticado.",
+    "inputs": "JSON: campo e valor. Campos permitidos: nome, cpf, cep, data_nascimento, email, endereco, telefone, raca.",
+    "rules": "Valida o campo e o valor; e-mail/CPF duplicados retornam 409; perfil atualizado retorna 200. A identidade é obtida de req.session, não de um ID enviado pelo cliente."
+  },
+  {
+    "group": "Paciente",
+    "method": "PATCH",
+    "path": "/pacientes/minha-prioridade",
+    "title": "Declarar prioridade legal",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Registra a autodeclaração de pessoa com deficiência e/ou gestante.",
+    "inputs": "JSON booleano: pcd, gestante. Ambos são obrigatórios.",
+    "rules": "A declaração não passa a valer para priorização até conferência pela unidade; mudança de informação pode limpar a confirmação anterior."
+  },
+  {
+    "group": "Paciente",
+    "method": "GET",
+    "path": "/meus-autorizados",
+    "title": "Listar pessoas autorizadas pelo próprio paciente",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Consulta as pessoas autorizadas a retirar insumos em nome do paciente autenticado.",
+    "inputs": "Sem parâmetros.",
+    "rules": "O escopo é o próprio paciente da sessão. O limite de cadastro identificado no controller é de até 5 pessoas; remoção administrativa é lógica."
+  },
+  {
+    "group": "Paciente",
+    "method": "GET",
+    "path": "/meus-insumos",
+    "title": "Listar insumos em uso do paciente",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Retorna prescrições autorizadas e vigentes com seus insumos e disponibilidade.",
+    "inputs": "Sem parâmetros.",
+    "rules": "A disponibilidade considera estoque e reservas; o paciente não recebe a quantidade total do estoque. Itens sem disponibilidade são sinalizados como indisponíveis."
+  },
+  {
+    "group": "Paciente",
+    "method": "GET",
+    "path": "/meus-agendamentos",
+    "title": "Listar os agendamentos do paciente",
+    "access": "JWT obrigatório; o controller resolve o paciente da sessão",
+    "purpose": "Lista os agendamentos associados ao paciente autenticado.",
+    "inputs": "Query de paginação: page, porPagina (quando aplicável).",
+    "rules": "O controller lista os dados do próprio paciente. Não confundir com GET /agendamentos, que é a listagem administrativa."
+  },
+  {
+    "group": "Paciente",
+    "method": "GET",
+    "path": "/meus-agendamentos/proximo",
+    "title": "Consultar o próximo agendamento",
+    "access": "JWT obrigatório; o controller resolve o paciente da sessão",
+    "purpose": "Retorna o próximo atendimento/agendamento do paciente.",
+    "inputs": "Sem parâmetros.",
+    "rules": "A seleção é limitada ao paciente autenticado."
+  },
+  {
+    "group": "Paciente",
+    "method": "GET",
+    "path": "/meus-agendamentos/:id/opcoes",
+    "title": "Consultar opções de outra data",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Lista datas e turnos disponíveis para pedir alteração de um agendamento próprio.",
+    "inputs": "Path: id do agendamento.",
+    "rules": "Só considera agendamento ativo; opções respeitam disponibilidade do posto e vencimento da prescrição de origem."
+  },
+  {
+    "group": "Paciente",
+    "method": "POST",
+    "path": "/meus-agendamentos/:id/outra-data",
+    "title": "Solicitar outra data para retirada",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Registra pedido para alterar data/turno do próprio agendamento, sujeito à resposta da unidade.",
+    "inputs": "Path: id. JSON: data (YYYY-MM-DD), turno (manha ou tarde), motivo opcional.",
+    "rules": "Nova data deve ser futura; não permite pedido pendente duplicado; verifica disponibilidade e vencimento da prescrição. Sucesso: 201."
+  },
+  {
+    "group": "Paciente",
+    "method": "PATCH",
+    "path": "/meus-agendamentos/:id/presenca",
+    "title": "Informar presença na retirada",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Registra se o paciente comparecerá ao agendamento.",
+    "inputs": "Path: id. JSON: resposta = \"vou\" ou \"nao_vou\".",
+    "rules": "Só aceita agendamento ativo e data não passada. Registra histórico e dispara notificação."
+  },
+  {
+    "group": "Paciente",
+    "method": "PATCH",
+    "path": "/meus-agendamentos/:id/cancelar",
+    "title": "Cancelar o próprio agendamento",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Permite ao paciente cancelar sua retirada agendada.",
+    "inputs": "Path: id. JSON: motivo opcional.",
+    "rules": "Só cancela agendamento ativo. A reserva de estoque deixa de ser considerada; motivo é limitado pelo controller."
+  },
+  {
+    "group": "Administrador",
+    "method": "GET",
+    "path": "/pacientesall",
+    "title": "Listar pacientes",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Lista pacientes cadastrados sem expor hash de senha.",
+    "inputs": "Sem parâmetros.",
+    "rules": "O controller remove pac_senha do resultado. Administrador universal e administrador de posto passam pelo middleware de administrador; conferir escopo do controller."
+  },
+  {
+    "group": "Administrador",
+    "method": "GET",
+    "path": "/pacientes",
+    "title": "Buscar pacientes por CPF ou nome",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Pesquisa pacientes para operações administrativas.",
+    "inputs": "Query: busca ou cpf. Termos com letras precisam ter pelo menos 2 caracteres; retorno limitado a 10 resultados.",
+    "rules": "A consulta remove dados sensíveis não necessários. Busca vazia/inválida retorna lista vazia; handler buscarPorCpf."
+  },
+  {
+    "group": "Administrador",
+    "method": "GET",
+    "path": "/pacientes/:id/resumo",
+    "title": "Consultar ficha resumida do paciente",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Retorna resumo do paciente, incluindo dados, prescrições e agendamentos.",
+    "inputs": "Path: id do paciente.",
+    "rules": "O controller aplica restrições de posto e não retorna senha. Administrador universal possui acesso ampliado."
+  },
+  {
+    "group": "Administrador",
+    "method": "PATCH",
+    "path": "/pacientes/:id/prioridade",
+    "title": "Conferir prioridade declarada pelo paciente",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Confirma ou rejeita a autodeclaração de prioridade legal do paciente.",
+    "inputs": "Path: id. JSON: conferida (boolean).",
+    "rules": "Não permite confirmar se o paciente não declarou deficiência nem gestação; paciente inexistente retorna 404."
+  },
+  {
+    "group": "Administrador",
+    "method": "GET",
+    "path": "/pacientes/:id/autorizados",
+    "title": "Listar pessoas autorizadas de um paciente",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Lista pessoas autorizadas a retirar insumos em nome do paciente informado.",
+    "inputs": "Path: id do paciente.",
+    "rules": "Acesso condicionado ao vínculo do administrador com o posto do paciente; universal possui acesso ampliado."
+  },
+  {
+    "group": "Administrador",
+    "method": "POST",
+    "path": "/pacientes/:id/autorizados",
+    "title": "Cadastrar pessoa autorizada",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Adiciona pessoa autorizada para retirada por um paciente.",
+    "inputs": "Path: id do paciente. JSON: nome, cpf, parentesco e telefone opcional.",
+    "rules": "Limite de até 5 pessoas autorizadas por paciente; valida dados e duplicidade. O cadastro é feito pela unidade."
+  },
+  {
+    "group": "Administrador",
+    "method": "PUT",
+    "path": "/pacientes/:id/autorizados/:pau",
+    "title": "Atualizar pessoa autorizada",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Atualiza os dados de uma pessoa autorizada.",
+    "inputs": "Path: id do paciente e pau (identificador da pessoa autorizada). JSON: campos cadastrais aceitos pelo controller.",
+    "rules": "Acesso condicionado ao posto do paciente. Conferir validações do controller antes de montar o corpo definitivo de integração."
+  },
+  {
+    "group": "Administrador",
+    "method": "DELETE",
+    "path": "/pacientes/:id/autorizados/:pau",
+    "title": "Remover pessoa autorizada",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Desativa logicamente uma pessoa autorizada vinculada ao paciente.",
+    "inputs": "Path: id do paciente e pau.",
+    "rules": "A remoção é lógica, preservando o registro histórico."
+  },
+  {
+    "group": "Administrador",
+    "method": "GET",
+    "path": "/painel/admin",
+    "title": "Carregar painel administrativo",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Retorna dados da fila de trabalho e indicadores do painel administrativo.",
+    "inputs": "Sem parâmetros.",
+    "rules": "Escopo respeita o posto do administrador; universal pode consultar escopo ampliado. O controller reúne contagens e listas de trabalho."
+  },
+  {
+    "group": "Administrador",
+    "method": "GET",
+    "path": "/atividades",
+    "title": "Consultar histórico de atividades da unidade",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Pesquisa atividades/auditoria por período, ação, usuário e texto.",
+    "inputs": "Query: data_inicio, data_fim, acao, usuario, busca, page, porPagina. page padrão 1; porPagina padrão 30 e limitado a 100.",
+    "rules": "Valida intervalo de datas e tipo de atividade; paginação retornada pelo controller."
+  },
+  {
+    "group": "Administrador",
+    "method": "GET",
+    "path": "/administradorall",
+    "title": "Listar administradores",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Lista contas de administradores.",
+    "inputs": "Sem parâmetros.",
+    "rules": "Handler administradorall. Dados de senha não devem ser expostos; restrições de escopo conforme controller."
+  },
+  {
+    "group": "Administrador universal e equipe",
+    "method": "GET",
+    "path": "/equipe",
+    "title": "Listar equipe da rede",
+    "access": "JWT obrigatório; ADMIN universal",
+    "purpose": "Lista equipe administrativa e autorizadores da rede.",
+    "inputs": "Sem parâmetros.",
+    "rules": "Exclusivo do middleware autorizarUniversal."
+  },
+  {
+    "group": "Administrador universal e equipe",
+    "method": "POST",
+    "path": "/equipe",
+    "title": "Cadastrar funcionário diretamente",
+    "access": "JWT obrigatório; ADMIN universal",
+    "purpose": "Cria conta de administrador ou autorizador com senha provisória.",
+    "inputs": "JSON: perfil (administrador ou autorizador) e os campos cadastrais exigidos pelo serviço de convite/cadastro.",
+    "rules": "perfil inválido retorna 400; matrícula duplicada pode retornar 409; o controller delega validações complementares."
+  },
+  {
+    "group": "Administrador universal e equipe",
+    "method": "PATCH",
+    "path": "/equipe/:perfil/:id/ativo",
+    "title": "Ativar ou desativar conta da equipe",
+    "access": "JWT obrigatório; ADMIN universal",
+    "purpose": "Altera o estado ativo de uma conta ADMIN ou AUTORIZADOR.",
+    "inputs": "Path: perfil (ADMIN/AUTORIZADOR) e id. JSON: ativo (boolean).",
+    "rules": "Não permite desativar a própria conta ADMIN nem desativar administrador universal por esta operação."
+  },
+  {
+    "group": "Administrador universal e equipe",
+    "method": "GET",
+    "path": "/convites",
+    "title": "Listar convites da equipe",
+    "access": "JWT obrigatório; ADMIN universal",
+    "purpose": "Lista convites gerados e sua situação.",
+    "inputs": "Sem parâmetros.",
+    "rules": "Exclusivo do administrador universal; situação calculada pelo serviço de convites."
+  },
+  {
+    "group": "Administrador universal e equipe",
+    "method": "POST",
+    "path": "/convites",
+    "title": "Criar convite de equipe",
+    "access": "JWT obrigatório; ADMIN universal",
+    "purpose": "Gera convite para cadastro de administrador ou autorizador.",
+    "inputs": "JSON: perfil; para convite de administrador também posto_id. Demais campos são definidos pelo controller.",
+    "rules": "Convites possuem validade e uso controlados. Administrador precisa de unidade válida."
+  },
+  {
+    "group": "Administrador universal e equipe",
+    "method": "DELETE",
+    "path": "/convites/:id",
+    "title": "Cancelar convite",
+    "access": "JWT obrigatório; ADMIN universal",
+    "purpose": "Cancela convite ainda não utilizado e dentro da validade.",
+    "inputs": "Path: id do convite.",
+    "rules": "Não permite cancelar convite já usado ou fora da validade; conflito retorna 409."
+  },
+  {
+    "group": "Administrador e autorizador",
+    "method": "GET",
+    "path": "/perfil",
+    "title": "Consultar próprio perfil de funcionário",
+    "access": "JWT obrigatório; ADMIN ou AUTORIZADOR",
+    "purpose": "Retorna os dados do próprio perfil de administrador/autorizador.",
+    "inputs": "Sem parâmetros.",
+    "rules": "O perfil é resolvido a partir da sessão autenticada."
+  },
+  {
+    "group": "Administrador e autorizador",
+    "method": "PUT",
+    "path": "/perfil",
+    "title": "Atualizar próprio perfil de funcionário",
+    "access": "JWT obrigatório; ADMIN ou AUTORIZADOR",
+    "purpose": "Atualiza nome, e-mail e telefone do funcionário autenticado.",
+    "inputs": "JSON: nome, email, telefone.",
+    "rules": "Valida dados; e-mail já utilizado retorna 409; perfil inexistente retorna 404."
+  },
+  {
+    "group": "Administrador e autorizador",
+    "method": "PUT",
+    "path": "/minha-senha",
+    "title": "Trocar a própria senha",
+    "access": "JWT obrigatório; ADMIN ou AUTORIZADOR",
+    "purpose": "Permite alterar senha atual, inclusive concluir a troca exigida no primeiro acesso.",
+    "inputs": "JSON: senha_atual, nova_senha, confirmacao_senha.",
+    "rules": "Valida senha atual e requisitos da nova senha; falha na senha atual retorna 400."
+  },
+  {
+    "group": "Autorizador",
+    "method": "GET",
+    "path": "/painel/autorizador",
+    "title": "Carregar painel do autorizador",
+    "access": "JWT obrigatório; AUTORIZADOR",
+    "purpose": "Retorna fila aguardando decisão, novas versões e decisões recentes.",
+    "inputs": "Sem parâmetros.",
+    "rules": "O painel agrega indicadores, fila de prescrições e decisões recentes; períodos e contagens definidos no controller."
+  },
+  {
+    "group": "Autorizador",
+    "method": "GET",
+    "path": "/autorizadorall",
+    "title": "Listar autorizadores",
+    "access": "JWT obrigatório; AUTORIZADOR",
+    "purpose": "Lista contas de autorizador sem expor senhas.",
+    "inputs": "Sem parâmetros.",
+    "rules": "Protegido por autorizarAut."
+  },
+  {
+    "group": "Autorizador",
+    "method": "GET",
+    "path": "/prescricao/aprovadas",
+    "title": "Listar prescrições disponíveis para decisão",
+    "access": "JWT obrigatório; AUTORIZADOR",
+    "purpose": "Lista solicitações nos estados Aprovado, Revisado, Autorizado e Nao Autorizado, conforme filtros.",
+    "inputs": "Query: status, busca, data_inicio, data_fim, page (paginação opcional).",
+    "rules": "Filtro de status e intervalo de datas são validados. Itens incluem dados relacionados do paciente, insumo e posto conforme controller."
+  },
+  {
+    "group": "Autorizador",
+    "method": "GET",
+    "path": "/autorizador/solicitacao/:id",
+    "title": "Consultar detalhes de solicitação para decisão",
+    "access": "JWT obrigatório; AUTORIZADOR",
+    "purpose": "Carrega detalhes da prescrição disponível para o autorizador.",
+    "inputs": "Path: id da solicitação.",
+    "rules": "A elegibilidade e os estados aceitos são verificados no controller."
+  },
+  {
+    "group": "Autorizador",
+    "method": "GET",
+    "path": "/autorizador/solicitacao/:id/prescricao",
+    "title": "Visualizar arquivo da prescrição",
+    "access": "JWT obrigatório; AUTORIZADOR; middleware autorizarVisualizacaoPrescricao",
+    "purpose": "Entrega o arquivo da prescrição e seu Content-Type.",
+    "inputs": "Path: id da solicitação.",
+    "rules": "Acesso à visualização passa por validação específica; resposta pode ser binária/imagem/PDF, não JSON."
+  },
+  {
+    "group": "Autorizador",
+    "method": "PATCH",
+    "path": "/autorizador/solicitacao/:id",
+    "title": "Registrar decisão do autorizador",
+    "access": "JWT obrigatório; AUTORIZADOR; middleware autorizarVisualizacaoPrescricao",
+    "purpose": "Altera o status da solicitação para Autorizado ou Nao Autorizado.",
+    "inputs": "Path: id. JSON: sol_status; sol_motivo_nao_autorizado quando a decisão for Nao Autorizado.",
+    "rules": "Somente status Aprovado ou Revisado recebem decisão; prescrição vencida não pode ser autorizada; não autorização exige motivo. Histórico é gravado em transação e há proteção contra decisões concorrentes."
+  },
+  {
+    "group": "Postos e agenda",
+    "method": "GET",
+    "path": "/postos/:id/horarios",
+    "title": "Consultar horários de funcionamento do posto",
+    "access": "Público",
+    "purpose": "Consulta horários, turnos, vagas e dias de atendimento da unidade.",
+    "inputs": "Path: id do posto.",
+    "rules": "Leitura pública; horários padrão e validações são implementados em utils/agenda.js."
+  },
+  {
+    "group": "Postos e agenda",
+    "method": "PUT",
+    "path": "/postos/:id/horarios",
+    "title": "Configurar horários do posto",
+    "access": "JWT obrigatório; ADMIN vinculado ao posto ou ADMIN universal",
+    "purpose": "Salva a configuração semanal de horários e vagas da unidade.",
+    "inputs": "Path: id. JSON: horarios (estrutura de dias/turnos validada por lerHorarios).",
+    "rules": "Exige ao menos um turno de atendimento; administrador comum só altera a própria unidade. Turnos manhã/tarde; vagas nulas ou entre 1 e 500."
+  },
+  {
+    "group": "Postos e agenda",
+    "method": "POST",
+    "path": "/postos/:id/bloqueios",
+    "title": "Bloquear um dia da agenda",
+    "access": "JWT obrigatório; ADMIN vinculado ao posto ou ADMIN universal",
+    "purpose": "Marca uma data como fechada para agendamentos.",
+    "inputs": "Path: id. JSON: data (YYYY-MM-DD), motivo opcional (até 120 caracteres).",
+    "rules": "Data não pode estar no passado; conflito se já estiver fechada; sucesso 201."
+  },
+  {
+    "group": "Postos e agenda",
+    "method": "DELETE",
+    "path": "/postos/:id/bloqueios/:bloqueio",
+    "title": "Remover bloqueio da agenda",
+    "access": "JWT obrigatório; ADMIN vinculado ao posto ou ADMIN universal",
+    "purpose": "Reabre um dia previamente bloqueado.",
+    "inputs": "Path: id do posto e bloqueio (id do bloqueio).",
+    "rules": "Retorna 404 se bloqueio não encontrado; administrador comum limitado à própria unidade."
+  },
+  {
+    "group": "Postos e agenda",
+    "method": "GET",
+    "path": "/postos/:id/agenda",
+    "title": "Consultar ocupação da agenda do posto",
+    "access": "JWT obrigatório; ADMIN vinculado ao posto ou ADMIN universal",
+    "purpose": "Retorna agenda/ocupação da unidade para um intervalo.",
+    "inputs": "Path: id. Query: inicio e fim (YYYY-MM-DD); padrão hoje até 13 dias depois.",
+    "rules": "Intervalo máximo de 62 dias; administrador comum só consulta a própria unidade."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "GET",
+    "path": "/agendamentos",
+    "title": "Listar agendamentos da unidade",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Lista agendamentos com filtros e ordenação.",
+    "inputs": "Query suportada pelo controller: status, busca, data_inicio, data_fim, order e filtros relacionados ao posto quando aplicável.",
+    "rules": "Administrador comum tem escopo do próprio posto; universal pode selecionar posto/escopo permitido."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "GET",
+    "path": "/agendamentos/separacao",
+    "title": "Consultar lista de separação de insumos",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Agrupa itens a separar por paciente e insumo para determinada data.",
+    "inputs": "Query: data e pos_id.",
+    "rules": "Administrador comum fica limitado ao próprio posto; universal pode consultar diferentes postos. Estados de separação incluem separar, nao_vai e entregue."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "GET",
+    "path": "/agendamentos/datas-sugeridas",
+    "title": "Consultar datas sugeridas para agendamento",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Calcula sugestões de datas disponíveis para agendamento.",
+    "inputs": "Query: pos_id obrigatório em contexto universal; ate e ignorar opcionais.",
+    "rules": "Usa agenda do posto, ocupação, bloqueios e vagas disponíveis; valida o posto informado quando necessário."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "POST",
+    "path": "/agendamentos",
+    "title": "Criar agendamento de retirada",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Agenda retirada de insumos para um paciente, com validação da prescrição e estoque.",
+    "inputs": "JSON: paciente, data/sol_data_de_coleta, posto, itens; campos adicionais podem incluir turno e confirmar_sem_estoque conforme fluxo do controller.",
+    "rules": "Data não pode ser passada; quantidades precisam ser inteiros positivos; verifica prescrição, titularidade, validade, vagas, estoque e reservas. Reserva ocorre no agendamento e baixa física no atendimento concluído."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "GET",
+    "path": "/agendamentos/qrcode",
+    "title": "Localizar agendamento pelo QR Code/protocolo",
+    "access": "JWT obrigatório; ADMIN; limite de leitura QR",
+    "purpose": "Busca atendimento a partir do conteúdo lido no QR Code.",
+    "inputs": "Query: codigo.",
+    "rules": "Aceita código/UUID e protocolo legado conforme implementação; limite de 30 leituras inválidas em 10 minutos, podendo retornar 429 e Retry-After."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "GET",
+    "path": "/agendamentos/:id/atendimento",
+    "title": "Consultar dados do atendimento",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Carrega os dados necessários para a tela de atendimento/retirada.",
+    "inputs": "Path: id do agendamento.",
+    "rules": "Valida vínculo do administrador com o posto; é rota de apoio à conclusão/cancelamento."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "PATCH",
+    "path": "/agendamentos/:id/concluir",
+    "title": "Concluir retirada de insumos",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Finaliza atendimento e registra a retirada.",
+    "inputs": "Path: id do agendamento. JSON com dados de retirada/retirante conforme controller.",
+    "rules": "Desconta efetivamente o estoque, registra quem retirou e atualiza status para concluído; operação controlada pelo controller."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "PATCH",
+    "path": "/agendamentos/:id/cancelar",
+    "title": "Cancelar agendamento administrativamente",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Cancela agendamento e registra motivo.",
+    "inputs": "Path: id. JSON: motivo.",
+    "rules": "O cancelamento exige motivo; valida status e vínculo com o posto."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "PATCH",
+    "path": "/agendamentos/:id/recado",
+    "title": "Salvar recado do atendimento",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Registra/atualiza recado associado ao agendamento.",
+    "inputs": "Path: id. JSON: campo de recado aceito pelo controller.",
+    "rules": "A operação registra observação no atendimento/histórico conforme controller."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "PATCH",
+    "path": "/agendamentos/:id/remarcar",
+    "title": "Remarcar agendamento",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Altera data/turno do agendamento existente, mantendo o protocolo.",
+    "inputs": "Path: id. JSON: nova data e turno conforme validações do controller.",
+    "rules": "Respeita disponibilidade do posto, validade da prescrição e regras de agenda; não cria um novo protocolo."
+  },
+  {
+    "group": "Agendamentos — administrador",
+    "method": "PATCH",
+    "path": "/agendamentos/:id/pedido-outra-data",
+    "title": "Responder pedido de outra data do paciente",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Aceita ou recusa a solicitação de alteração de data aberta pelo paciente.",
+    "inputs": "Path: id. JSON: aceitar (boolean); resposta quando aceitar=false.",
+    "rules": "Recusa exige justificativa; verifica se existe pedido pendente e, ao aceitar, revalida disponibilidade."
+  },
+  {
+    "group": "Insumos e estoque",
+    "method": "GET",
+    "path": "/insumos",
+    "title": "Buscar insumos",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Pesquisa insumos por nome ou ID, respeitando o posto.",
+    "inputs": "Query: busca; pos_id pode ser usado por administrador universal conforme controller.",
+    "rules": "Sem termo de busca retorna lista vazia. Administrador comum consulta insumos do seu posto; universal tem escopo ampliado."
+  },
+  {
+    "group": "Insumos e estoque",
+    "method": "GET",
+    "path": "/insumos/listar",
+    "title": "Listar insumos cadastrados",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Lista insumos do posto/escopo administrativo.",
+    "inputs": "Sem parâmetros; escopo deriva da sessão e, para universal, dos filtros aceitos.",
+    "rules": "A resposta e os campos projetados são definidos por insumosControllers.listar."
+  },
+  {
+    "group": "Insumos e estoque",
+    "method": "POST",
+    "path": "/insumos",
+    "title": "Cadastrar insumo",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Cria insumo vinculado ao posto do administrador.",
+    "inputs": "JSON: nome, quantidade e marca opcional.",
+    "rules": "Duplicidade verificada por nome e marca; se já existir com estoque zero, o fluxo pode reabastecer o registro existente."
+  },
+  {
+    "group": "Insumos e estoque",
+    "method": "PATCH",
+    "path": "/insumos/:id",
+    "title": "Movimentar estoque de insumo",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Registra entrada ou saída de estoque.",
+    "inputs": "Path: id do insumo. JSON: tipo (entrada ou saida), quantidade (inteiro positivo).",
+    "rules": "Não permite saída superior ao estoque atual; resposta informa quantidades atual, reservada e disponível. Pode gerar aviso se estoque ficar abaixo das reservas."
+  },
+  {
+    "group": "Prescrições — paciente",
+    "method": "POST",
+    "path": "/solicitacoes",
+    "title": "Enviar solicitação com prescrição",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Cria solicitação de análise de prescrição para o paciente autenticado.",
+    "inputs": "JSON: pos_id, sol_prescricao (arquivo em Base64), sol_observacao opcional, sol_prescricao_tipo conforme validação.",
+    "rules": "Aceita PDF/imagem conforme validação; limite de 5 MB; observação até 1.000 caracteres; impede duplicação pendente do mesmo arquivo; registra histórico. Sucesso 201."
+  },
+  {
+    "group": "Prescrições — paciente",
+    "method": "GET",
+    "path": "/solicitacao/pacienteid",
+    "title": "Consultar prescrições/solicitações do próprio paciente",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Retorna prescrições associadas ao paciente autenticado.",
+    "inputs": "Sem parâmetros.",
+    "rules": "Escopo identificado pela sessão; controller prescicaodopaciente."
+  },
+  {
+    "group": "Prescrições — paciente",
+    "method": "GET",
+    "path": "/minhas-prescricoes",
+    "title": "Listar prescrições do paciente com linha do tempo",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Retorna as prescrições do paciente com informações de agendamento e rastreabilidade.",
+    "inputs": "Sem parâmetros ou filtros adicionais além dos implementados no controller.",
+    "rules": "Restrito às prescrições do próprio paciente; inclui histórico/linha do tempo conforme implementação."
+  },
+  {
+    "group": "Prescrições — paciente",
+    "method": "GET",
+    "path": "/solicitacao/:id/detalhes",
+    "title": "Consultar detalhes da própria prescrição",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Retorna detalhes da solicitação para o paciente titular.",
+    "inputs": "Path: id da solicitação.",
+    "rules": "Retorna 404 se não existir e 403 se a prescrição não pertencer ao paciente autenticado."
+  },
+  {
+    "group": "Prescrições — paciente",
+    "method": "PATCH",
+    "path": "/solicitacao/:id/corrigir",
+    "title": "Corrigir e reenviar prescrição",
+    "access": "JWT obrigatório; PACIENTE",
+    "purpose": "Envia nova versão/arquivo para solicitação em situação de reenvio.",
+    "inputs": "Path: id. JSON: campos de correção e arquivo em Base64 conforme validador de arquivo.",
+    "rules": "O paciente só corrige sua própria solicitação e quando o status permite reenvio; valida arquivo, tamanho e regras de atualização."
+  },
+  {
+    "group": "Prescrições — paciente e equipe",
+    "method": "GET",
+    "path": "/solicitacao/:id/versoes",
+    "title": "Listar versões anteriores da prescrição",
+    "access": "JWT obrigatório; controller valida perfil, posse e acesso",
+    "purpose": "Lista versões armazenadas de uma solicitação.",
+    "inputs": "Path: id da solicitação.",
+    "rules": "A autorização é decidida no controller conforme perfil e titularidade; contém versões anteriores para rastreabilidade."
+  },
+  {
+    "group": "Prescrições — paciente e equipe",
+    "method": "GET",
+    "path": "/solicitacao/:id/versoes/:versao/arquivo",
+    "title": "Obter arquivo de uma versão anterior",
+    "access": "JWT obrigatório; controller valida perfil, posse e acesso",
+    "purpose": "Entrega o arquivo de uma versão histórica da prescrição.",
+    "inputs": "Path: id da solicitação e versao.",
+    "rules": "A resposta é conteúdo de arquivo com tipo MIME, não necessariamente JSON; acesso é validado pelo controller."
+  },
+  {
+    "group": "Prescrições — paciente e equipe",
+    "method": "GET",
+    "path": "/solicitacao/:id/historico",
+    "title": "Consultar histórico de uma solicitação",
+    "access": "JWT obrigatório; controller valida perfil, posse e acesso",
+    "purpose": "Retorna eventos de auditoria da solicitação.",
+    "inputs": "Path: id da solicitação.",
+    "rules": "Registra quem fez o quê; o controller confere perfil e posse e retorna eventos em ordem definida pela implementação."
+  },
+  {
+    "group": "Prescrições — administrador",
+    "method": "GET",
+    "path": "/pendentes",
+    "title": "Listar prescrições pendentes para análise",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Lista prescrições que aguardam análise administrativa.",
+    "inputs": "Sem parâmetros adicionais documentados na rota; filtros/paginação conforme controller.",
+    "rules": "Respeita restrição do posto, exceto administrador universal."
+  },
+  {
+    "group": "Prescrições — administrador",
+    "method": "GET",
+    "path": "/solicitacao/:id/prescricao",
+    "title": "Visualizar arquivo da prescrição",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Entrega arquivo da prescrição solicitada.",
+    "inputs": "Path: id da solicitação.",
+    "rules": "Passa por validação de acesso ao posto; resposta de arquivo/MIME conforme conteúdo armazenado."
+  },
+  {
+    "group": "Prescrições — administrador",
+    "method": "GET",
+    "path": "/solicitacao/:id",
+    "title": "Consultar solicitação por ID",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Carrega detalhes da solicitação para análise administrativa.",
+    "inputs": "Path: id.",
+    "rules": "Respeita vínculo com posto; administrador universal possui exceção."
+  },
+  {
+    "group": "Prescrições — administrador",
+    "method": "PATCH",
+    "path": "/solicitacao/:id",
+    "title": "Atualizar análise/status de solicitação",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Registra análise administrativa e altera status da solicitação.",
+    "inputs": "Path: id. JSON: sol_status, sol_data_vencimento, itens e sol_periodicidade_dias conforme regra do controller.",
+    "rules": "Valida status, itens, validade (não pode estar no passado), periodicidade de 7 a 180 dias ou nula, insumos do mesmo posto; protege contra conflito e grava histórico."
+  },
+  {
+    "group": "Prescrições — administrador",
+    "method": "PATCH",
+    "path": "/solicitacao/:id/reenvio",
+    "title": "Solicitar reenvio/correção de prescrição",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Devolve a prescrição ao paciente para correção.",
+    "inputs": "Path: id. JSON: motivo (motivos aceitos: FOTO_SEM_QUALIDADE, PRESCRICAO_VENCIDA, INFORMACAO_DIFERENTE, OUTRO) e observação, conforme controller.",
+    "rules": "Valida a situação da solicitação; pode exigir motivo e registra evento/notificação."
+  },
+  {
+    "group": "Prescrições — administrador",
+    "method": "PATCH",
+    "path": "/solicitacao/:id/refazer",
+    "title": "Solicitar nova decisão de autorização para pedido não autorizado",
+    "access": "JWT obrigatório; ADMIN; acesso ao posto validado",
+    "purpose": "Permite refazer pedido anteriormente não autorizado, com condições.",
+    "inputs": "Path: id. JSON: observação/motivo conforme campos lidos pelo controller.",
+    "rules": "Somente para status elegível; valida validade da prescrição e registra histórico; não altera o fluxo arbitrariamente."
+  },
+  {
+    "group": "Prescrições — administrador",
+    "method": "GET",
+    "path": "/prescricoes/historico",
+    "title": "Consultar histórico geral de prescrições",
+    "access": "JWT obrigatório; ADMIN",
+    "purpose": "Lista histórico de prescrições para acompanhamento administrativo.",
+    "inputs": "Query: situacao, filtros e paginação conforme controller.",
+    "rules": "Filtro situacao inválido retorna 400; respeita escopo administrativo."
+  },
+  {
+    "group": "Prescrições — legado desativado",
+    "method": "PATCH",
+    "path": "/solicitacao/:id/transferir",
+    "title": "Rota de transferência descontinuada",
+    "access": "JWT obrigatório; qualquer usuário autenticado",
+    "purpose": "Endpoint mantido apenas para compatibilidade com clientes antigos.",
+    "inputs": "Path: id. Nenhum corpo é processado.",
+    "rules": "Retorna HTTP 410 e {error: \"A transferência entre unidades não está mais disponível.\"}. Não executa transferência."
+  },
+  {
+    "group": "Notificações",
+    "method": "GET",
+    "path": "/notificacoes",
+    "title": "Listar notificações do usuário",
+    "access": "JWT obrigatório; PACIENTE, ADMIN ou AUTORIZADOR",
+    "purpose": "Lista notificações destinadas à pessoa autenticada.",
+    "inputs": "Query: situacao = todas ou nao_lidas; page/porPagina conforme paginação do controller.",
+    "rules": "Notificações são filtradas pelo destinatário resolvido da sessão; retorno inclui paginação e contador naoLidas."
+  },
+  {
+    "group": "Notificações",
+    "method": "GET",
+    "path": "/notificacoes/resumo",
+    "title": "Consultar resumo das notificações",
+    "access": "JWT obrigatório; PACIENTE, ADMIN ou AUTORIZADOR",
+    "purpose": "Retorna contador de não lidas e notificações recentes.",
+    "inputs": "Sem parâmetros.",
+    "rules": "O conteúdo é específico do destinatário autenticado."
+  },
+  {
+    "group": "Notificações",
+    "method": "PATCH",
+    "path": "/notificacoes/lidas",
+    "title": "Marcar notificações como lidas em lote",
+    "access": "JWT obrigatório; PACIENTE, ADMIN ou AUTORIZADOR",
+    "purpose": "Marca notificações como lidas até o critério informado.",
+    "inputs": "JSON: ate (valor de data/identificador aceito pelo controller).",
+    "rules": "Parâmetro ate inválido retorna 400; somente notificações do destinatário da sessão são afetadas."
+  },
+  {
+    "group": "Notificações",
+    "method": "PATCH",
+    "path": "/notificacoes/:id/lida",
+    "title": "Marcar uma notificação como lida",
+    "access": "JWT obrigatório; PACIENTE, ADMIN ou AUTORIZADOR",
+    "purpose": "Marca uma notificação individual como lida.",
+    "inputs": "Path: id da notificação.",
+    "rules": "Notificação inexistente ou não pertencente ao destinatário retorna 404; atualiza contador de não lidas."
+  },
+  {
+    "group": "Tarefas automáticas",
+    "method": "GET",
+    "path": "/tarefas/diaria",
+    "title": "Executar processamento diário",
+    "access": "Segredo CRON; Authorization: Bearer <CRON_SECRET>",
+    "purpose": "Executa tarefas programadas de lembretes, pendências, prescrições vencidas, não comparecimento e retenção.",
+    "inputs": "Header Authorization: Bearer <CRON_SECRET>.",
+    "rules": "Sem CRON_SECRET configurado retorna 503; segredo incorreto retorna 401. A rota é protegida por autorizarCron e não por JWT de usuário."
   }
-]</code></pre>
-                </div>
-            </article>
+];
+const routeCounts = {GET:47,POST:12,PUT:5,PATCH:19,DELETE:3};
+const groupDescriptions = {
+ 'Início e autenticação':'Endpoints de status, login, validação de sessão e cadastros públicos protegidos por convite.',
+ 'Paciente':'Operações realizadas pelo paciente autenticado e recursos próprios.',
+ 'Administrador':'Gestão de pacientes, autorizações de retirada, painéis e atividades da unidade.',
+ 'Administrador universal e equipe':'Gestão centralizada da equipe e dos convites, exclusiva do administrador universal.',
+ 'Administrador e autorizador':'Perfil e troca de senha do próprio funcionário autenticado.',
+ 'Autorizador':'Fila de prescrições, análise, visualização e decisão de autorização.',
+ 'Postos e agenda':'Consulta de unidades, funcionamento, bloqueios e ocupação da agenda.',
+ 'Agendamentos — administrador':'Criação, consulta, separação, atendimento, remarcação e cancelamento de retiradas.',
+ 'Insumos e estoque':'Consulta, cadastro e movimentação de estoque.',
+ 'Prescrições — paciente':'Envio, consulta e correção de prescrições pelo paciente titular.',
+ 'Prescrições — paciente e equipe':'Versões e histórico; o controller valida titularidade e perfil.',
+ 'Prescrições — administrador':'Análise administrativa, reenvio, refação e histórico de prescrições.',
+ 'Prescrições — legado desativado':'Rota mantida para compatibilidade, sem funcionalidade ativa.',
+ 'Notificações':'Caixa de notificações individual para qualquer perfil autenticado.',
+ 'Tarefas automáticas':'Execução protegida das rotinas agendadas pelo serviço de cron.'
+};
+const API_BASE_URL = 'https://backend-insumed-lhac.vercel.app';
+const methodLabel = m => m;
+const buildEndpointUrl = path => `${API_BASE_URL}${path}`;
+const esc = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const groupsEl=document.getElementById('groups'),navEl=document.getElementById('nav'),filterEl=document.getElementById('groupFilter');
+const priorities=['Paciente','Administrador','Autorizador','Administrador universal e equipe','Administrador e autorizador','Postos e agenda','Agendamentos — administrador','Insumos e estoque','Prescrições — paciente','Prescrições — paciente e equipe','Prescrições — administrador','Prescrições — legado desativado','Notificações','Tarefas automáticas','Início e autenticação'];
+const order=priorities.filter(g=>endpoints.some(e=>e.group===g));
+order.forEach((g,i)=>{const id='g'+i;const count=endpoints.filter(e=>e.group===g).length;navEl.insertAdjacentHTML('beforeend',`<a href="#${id}">${esc(g)}<b>${count}</b></a>`);filterEl.insertAdjacentHTML('beforeend',`<option value="${esc(g)}">${esc(g)}</option>`);const items=endpoints.filter(e=>e.group===g);const section=document.createElement('section');section.className='group';section.id=id;section.dataset.group=g;section.innerHTML=`<div class="grouphead"><div><h2>${esc(g)}</h2><p>${esc(groupDescriptions[g]||'Endpoints deste módulo.')}</p></div><span class="count">${items.length} rota${items.length===1?'':'s'}</span></div><div class="ep-list"></div>`;const list=section.querySelector('.ep-list');items.forEach((e)=>{const card=document.createElement('article');card.className='endpoint';card.dataset.method=e.method;card.dataset.group=e.group;card.dataset.search=(e.method+' '+e.path+' '+buildEndpointUrl(e.path)+' '+e.title+' '+e.access+' '+e.purpose+' '+e.inputs+' '+e.rules).toLowerCase();const endpointUrl=buildEndpointUrl(e.path);const copyValue=`${e.method} ${endpointUrl}`;card.innerHTML=`<button class="summary" type="button" aria-expanded="false"><span class="method ${e.method}">${e.method}</span><span><span class="ep-title">${esc(e.title)}</span><code class="path">${esc(e.path)}</code><code class="full-url">${esc(endpointUrl)}</code></span><span class="ep-access">${esc(e.access)}</span><span class="chev">＋</span></button><div class="details" hidden><p>${esc(e.purpose)}</p><div class="detailbox" style="margin-bottom:10px"><h4>URL completa</h4><p><code>${esc(endpointUrl)}</code></p></div><div class="detailgrid"><div class="detailbox"><h4>Acesso e autenticação</h4><p>${esc(e.access)}</p></div><div class="detailbox"><h4>Parâmetros e corpo</h4><p>${esc(e.inputs)}</p></div></div><div class="detailbox" style="margin-top:10px"><h4>Observações e regras</h4><p>${esc(e.rules)}</p></div><div class="ep-actions"><button class="copy" type="button" data-copy="${esc(copyValue)}">Copiar método + URL</button></div></div>`;const btn=card.querySelector('.summary');btn.addEventListener('click',()=>{const d=card.querySelector('.details');const opened=!d.hidden;d.hidden=opened;btn.setAttribute('aria-expanded',String(!opened));card.querySelector('.chev').textContent=opened?'＋':'−'});card.querySelector('.copy').addEventListener('click',async ev=>{const b=ev.currentTarget;try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='Copiado!'}catch{b.textContent='Selecione: '+b.dataset.copy}setTimeout(()=>b.textContent='Copiar método + URL',1600)});list.appendChild(card)});groupsEl.appendChild(section)});
+const stats=document.getElementById('stats');stats.innerHTML=[['86','Rotas no código'],['47','GET'],['12','POST'],['5','PUT'],['19','PATCH'],['3','DELETE']].map(x=>`<div class="stat"><strong>${x[0]}</strong><span>${x[1]}</span></div>`).join('');
+const q=document.getElementById('q'),m=document.getElementById('method'),gf=document.getElementById('groupFilter');
+function applyFilters(){const term=q.value.trim().toLowerCase();let visible=0;document.querySelectorAll('.endpoint').forEach(card=>{const show=(!term||card.dataset.search.includes(term))&&(!m.value||card.dataset.method===m.value)&&(!gf.value||card.dataset.group===gf.value);card.hidden=!show;if(show)visible++});document.querySelectorAll('.group').forEach(g=>{g.classList.toggle('hide',!Array.from(g.querySelectorAll('.endpoint')).some(e=>!e.hidden))});let box=document.getElementById('empty');if(!visible){if(!box){box=document.createElement('div');box.id='empty';box.className='empty';box.textContent='Nenhum endpoint corresponde aos filtros selecionados.';groupsEl.appendChild(box)}}else if(box)box.remove()}
+[q,m,gf].forEach(el=>el.addEventListener(el===q?'input':'change',applyFilters));
 
-            <!-- 3. AGENDAMENTOS -->
-            <article id="get-agendamentos" class="endpoint-card">
-                <div class="endpoint-header get">
-                    <span class="method">GET</span>
-                    <span class="path">/agendamentos</span>
-                </div>
-                <p class="description">Lista agendamentos com filtros avançados. (Visão do Administrador)</p>
-                
-                <h4>Query Params Disponíveis:</h4>
-                <ul>
-                    <li><code>status</code>: 'agendado', 'concluido', 'cancelado', 'todos'</li>
-                    <li><code>busca</code>: Nome, CPF ou Protocolo</li>
-                    <li><code>data_inicio</code> e <code>data_fim</code>: Formato YYYY-MM-DD</li>
-                    <li><code>order</code>: 'proximidade' ou 'asc'</li>
-                </ul>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong> - Array de agendamentos agrupados.
-                </div>
-            </article>
-
-            <article id="post-agendamentos" class="endpoint-card">
-                <div class="endpoint-header post">
-                    <span class="method">POST</span>
-                    <span class="path">/agendamentos</span>
-                </div>
-                <p class="description">Cria um novo agendamento, gera o protocolo e insere os itens de coleta via transação. (Visão do Administrador)</p>
-                
-                <h4>Corpo da Requisição (JSON):</h4>
-                <pre><code>{
-  "paciente": { "pac_id": 1 },
-  "sol_data_de_coleta": "2026-10-15",
-  "posto": { "pos_id": 2 },
-  "itens": [
-    { "ins_nome": "Seringa", "quantidade": 2 },
-    { "ins_nome": "Tubo de ensaio", "quantidade": 5 }
-  ]
-}</code></pre>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>201 Created</strong>
-                    <pre><code>{ 
-  "message": "Agendamento criado com sucesso", 
-  "sol_id": 42, 
-  "sol_protocolo": "AG000042" 
-}</code></pre>
-                </div>
-            </article>
-
-            <article id="patch-agendamentos-concluir" class="endpoint-card">
-                <div class="endpoint-header patch">
-                    <span class="method">PATCH</span>
-                    <span class="path">/agendamentos/:id/concluir</span>
-                </div>
-                <p class="description">Atualiza o status do agendamento para concluído.</p>
-                
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong>
-                    <pre><code>{ "message": "Agendamento concluído" }</code></pre>
-                </div>
-                <div class="response-box error">
-                    <strong>404 Not Found</strong>
-                    <pre><code>{ "message": "Agendamento não encontrado" }</code></pre>
-                </div>
-            </article>
-
-            <article id="patch-agendamentos-cancelar" class="endpoint-card">
-                <div class="endpoint-header patch">
-                    <span class="method">PATCH</span>
-                    <span class="path">/agendamentos/:id/cancelar</span>
-                </div>
-                <p class="description">Atualiza o status do agendamento para cancelado.</p>
-                
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong>
-                    <pre><code>{ "message": "Agendamento cancelado" }</code></pre>
-                </div>
-            </article>
-
-            <article id="get-agendamentos-meus" class="endpoint-card">
-                <div class="endpoint-header get">
-                    <span class="method">GET</span>
-                    <span class="path">/agendamentos/meus</span>
-                </div>
-                <p class="description">Retorna os agendamentos do paciente logado, com paginação. Exige token de Paciente.</p>
-                
-                <h4>Query Params:</h4>
-                <pre><code>?page=1&porPagina=4</code></pre>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong>
-                    <pre><code>{ 
-  "itens": [...], 
-  "paginaAtual": 1, 
-  "totalPaginas": 3 
-}</code></pre>
-                </div>
-                <div class="response-box error">
-                    <strong>403 Forbidden</strong>
-                    <pre><code>{ "error": "Rota exclusiva de paciente" }</code></pre>
-                </div>
-            </article>
-
-            <!-- 4. SOLICITAÇÕES -->
-            <article id="post-solicitacoes" class="endpoint-card">
-                <div class="endpoint-header post">
-                    <span class="method">POST</span>
-                    <span class="path">/solicitacoes</span>
-                </div>
-                <p class="description">Envia uma nova solicitação/prescrição vinculada ao paciente logado.</p>
-                
-                <h4>Corpo da Requisição (JSON):</h4>
-                <pre><code>{
-  "pos_id": 1,
-  "sol_prescricao": "BASE_64_STRING_DA_IMAGEM",
-  "sol_observacao": "Observação opcional",
-  "sol_prescricao_tipo": "Tipo opcional"
-}</code></pre>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>201 Created</strong>
-                    <pre><code>{ "message": "Solicitação enviada com sucesso", "solicitacao": [...] }</code></pre>
-                </div>
-            </article>
-
-            <!-- 5. ADMINISTRADORES -->
-            <article id="post-administradores" class="endpoint-card">
-                <div class="endpoint-header post">
-                    <span class="method">POST</span>
-                    <span class="path">/administradores</span>
-                </div>
-                <p class="description">Cria um novo administrador no sistema.</p>
-                
-                <h4>Corpo da Requisição (JSON):</h4>
-                <pre><code>{
-  "matricula": "ADM123",
-  "nome": "Admin Silva",
-  "email": "admin@email.com",
-  "telefone": "24999999999",
-  "senha": "senhaforte",
-  "cpf": "12345678900",
-  "posto_id": 1
-}</code></pre>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>201 Created</strong>
-                    <pre><code>{ 
-  "message": "Administrador criado com sucesso", 
-  "id": 1, 
-  "tp_universal": false, 
-  "vinculado_a_posto": 1 
-}</code></pre>
-                </div>
-            </article>
-
-            <!-- 7. INSUMOS -->
-            <article id="get-insumos-buscar" class="endpoint-card">
-                <div class="endpoint-header get">
-                    <span class="method">GET</span>
-                    <span class="path">/insumos/buscar</span>
-                </div>
-                <p class="description">Busca insumos por nome ou ID (utilizado no momento de criar agendamentos).</p>
-                
-                <h4>Query Params:</h4>
-                <pre><code>?busca=seringa</code></pre>
-
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong>
-                    <pre><code>[
-  { 
-    "ins_id": 1, 
-    "ins_nome": "Seringa", 
-    "ins_quantidade": 100 
-  }
-]</code></pre>
-                </div>
-            </article>
-
-            <!-- 8. POSTOS -->
-            <article id="get-postos" class="endpoint-card">
-                <div class="endpoint-header get">
-                    <span class="method">GET</span>
-                    <span class="path">/postos</span>
-                </div>
-                <p class="description">Retorna a lista de todos os postos de saúde cadastrados ordenados alfabeticamente.</p>
-                
-                <h4>Respostas:</h4>
-                <div class="response-box success">
-                    <strong>200 OK</strong> - Array com dados de postos.
-                </div>
-            </article>
-
-        </section>
-    </main>
-
-    <footer class="main-footer">
-        <p>&copy; 2026 Insumed Backend. Todos os direitos reservados.</p>
-    </footer>
-
-</body>
-</html>
+</script>
+</body></html>
